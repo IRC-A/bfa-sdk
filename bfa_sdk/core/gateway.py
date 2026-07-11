@@ -4,8 +4,14 @@ import httpx
 import asyncio
 import json
 import os
+import time
+import secrets
+import jwt
 from typing import Dict, Any, List, Optional
 from a2a.client import A2ACardResolver
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.exceptions import InvalidSignature
 
 from bfa_sdk.config import BFAConfig
 from bfa_sdk.router.embedder import LocalEmbedder, DummyEmbedder, OpenAIEmbedder
@@ -17,6 +23,14 @@ EMBEDDER = None
 ROUTER = None
 
 REGISTRY_DB_PATH = os.getenv("BFA_REGISTRY_DB_PATH", "bfa_registry_db.json")
+
+# Ephemeral keys generated on load (unless loaded from env/files)
+GATEWAY_PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+GATEWAY_PUBLIC_KEY = GATEWAY_PRIVATE_KEY.public_key()
+
+# Memory databases for challenge-response handshake
+CHALLENGES: Dict[str, str] = {} # node_id -> challenge_hex
+REGISTERED_NODES: Dict[str, Dict[str, Any]] = {} # node_id -> {"public_key": rsa_pubkey_obj, "channels": list}
 
 def load_persisted_endpoints() -> Dict[str, List[str]]:
     """
@@ -142,6 +156,12 @@ async def lifespan(app: FastAPI):
     agents = await discover_agents(all_agents)
     tools = await discover_tools(all_mcps)
     
+    # Assign default '#public' channels to statically loaded endpoints
+    for skill_id in agents:
+        agents[skill_id]["channels"] = ["#public"]
+    for tool_name in tools:
+        tools[tool_name]["channels"] = ["#public"]
+        
     ROUTER.update_registry(agents)
     ROUTER.update_registry(tools)
     ROUTER.build_index()
@@ -203,8 +223,175 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="Gateway not ready")
         return ROUTER.resolve(query, top_k=top_k, threshold=threshold, filter_type="tool")
 
+    @app.get("/public_key")
+    def get_public_key():
+        pem = GATEWAY_PUBLIC_KEY.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        return {"public_key": pem.decode("utf-8")}
+
+    @app.post("/register/init")
+    def register_init(payload: Dict[str, Any]):
+        node_id = payload.get("node_id")
+        channels = payload.get("channels", ["#public"])
+        if not node_id:
+            raise HTTPException(status_code=400, detail="Missing node_id")
+            
+        challenge_bytes = secrets.token_hex(32)
+        CHALLENGES[node_id] = challenge_bytes
+        REGISTERED_NODES[node_id] = {
+            "channels": channels,
+            "public_key": None
+        }
+        return {"challenge_bytes": challenge_bytes}
+
+    @app.post("/register/verify")
+    def register_verify(payload: Dict[str, Any]):
+        node_id = payload.get("node_id")
+        signature_hex = payload.get("signature")
+        public_key_pem = payload.get("public_key")
+        
+        if not node_id or not signature_hex or not public_key_pem:
+            raise HTTPException(status_code=400, detail="Missing required parameters")
+            
+        challenge = CHALLENGES.get(node_id)
+        if not challenge:
+            raise HTTPException(status_code=400, detail="No active challenge for this node_id")
+            
+        try:
+            pubkey = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
+            sig_bytes = bytes.fromhex(signature_hex)
+            pubkey.verify(
+                sig_bytes,
+                challenge.encode("utf-8"),
+                padding.PKCS1v15(),
+                hashes.SHA256()
+            )
+        except InvalidSignature:
+            raise HTTPException(status_code=401, detail="Invalid cryptographic signature")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to verify signature: {e}")
+            
+        REGISTERED_NODES[node_id]["public_key"] = pubkey
+        del CHALLENGES[node_id]
+        
+        expiry = int(time.time()) + 3600
+        session_token = jwt.encode(
+            {
+                "sub": node_id,
+                "channels": REGISTERED_NODES[node_id]["channels"],
+                "exp": expiry
+            },
+            GATEWAY_PRIVATE_KEY,
+            algorithm="RS256"
+        )
+        
+        return {"session_token": session_token, "expiry": expiry}
+
+    @app.post("/register/disconnect")
+    def register_disconnect(payload: Dict[str, Any]):
+        """
+        Unregisters/disconnects a node from the Gateway registry and rebuilds the FAISS index.
+        """
+        node_id = payload.get("node_id")
+        if not node_id:
+            raise HTTPException(status_code=400, detail="Missing node_id")
+            
+        # 1. Remove from registered nodes list
+        if node_id in REGISTERED_NODES:
+            del REGISTERED_NODES[node_id]
+            
+        # 2. Remove associated capabilities from semantic search registry
+        keys_to_remove = []
+        for key, value in list(ROUTER.registry.items()):
+            if key == node_id or value.get("url") == node_id or value.get("server_url") == node_id:
+                keys_to_remove.append(key)
+            elif value.get("type") == "agent" and key.startswith(node_id):
+                keys_to_remove.append(key)
+                
+        for k in keys_to_remove:
+            if k in ROUTER.registry:
+                del ROUTER.registry[k]
+                
+        # Rebuild FAISS index
+        if ROUTER:
+            ROUTER.build_index()
+            
+        return {
+            "status": "success",
+            "message": f"Node '{node_id}' successfully disconnected and removed from FAISS index."
+        }
+
+    @app.post("/discover")
+    def discover(query: str, payload: Dict[str, Any] = None):
+        """
+        Secure semantic discovery (IRC-A Gateway broker).
+        Verifies session token, performs logical channel masking, and mints an ephemeral DET.
+        """
+        auth_header = None
+        if payload:
+            auth_header = payload.get("session_token")
+            
+        if not auth_header:
+            raise HTTPException(status_code=401, detail="Missing session_token")
+            
+        try:
+            decoded_session = jwt.decode(
+                auth_header,
+                GATEWAY_PUBLIC_KEY,
+                algorithms=["RS256"]
+            )
+            caller_id = decoded_session["sub"]
+            caller_channels = decoded_session.get("channels", ["#public"])
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Session token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid session token")
+            
+        if not ROUTER:
+            raise HTTPException(status_code=503, detail="Gateway not ready")
+            
+        result = ROUTER.resolve(query, agent_channels=caller_channels)
+        best = result.get("best")
+        if not best:
+            raise HTTPException(status_code=404, detail="No matching capability found under authorized channels")
+            
+        target_node_id = best["skill"]
+        target_type = best["type"]
+        
+        # Simple customer ID extraction for parameter lockdown demo
+        restricted_params = {}
+        import re
+        customer_match = re.search(r"customer\s+(?:id-)?(\w+)", query, re.IGNORECASE)
+        if customer_match:
+            restricted_params["customer_id"] = customer_match.group(1)
+            
+        det_expiry = int(time.time()) + 60
+        det = jwt.encode(
+            {
+                "sub": caller_id,
+                "aud": target_node_id,
+                "permitted_action": best["data"]["name"],
+                "restricted_params": restricted_params,
+                "exp": det_expiry
+            },
+            GATEWAY_PRIVATE_KEY,
+            algorithm="RS256"
+        )
+        
+        target_url = best["data"].get("url") or best["data"].get("server_url")
+        
+        return {
+            "status": "success",
+            "det": det,
+            "url": target_url,
+            "target_node_id": target_node_id,
+            "type": target_type
+        }
+
     @app.post("/register/agent")
-    async def register_agent(url: str):
+    async def register_agent(url: str, channels: str = "#public"):
         """
         Dynamically register a new A2A Agent URL in runtime, index it in FAISS, and persist it.
         """
@@ -214,6 +401,10 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         new_agents = await discover_agents([url])
         if not new_agents:
             raise HTTPException(status_code=400, detail=f"Failed to discover agent at {url}")
+            
+        channel_list = [ch.strip() for ch in channels.split(",") if ch.strip()]
+        for skill_id in new_agents:
+            new_agents[skill_id]["channels"] = channel_list
             
         ROUTER.update_registry(new_agents)
         ROUTER.build_index()
@@ -226,7 +417,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
 
     @app.post("/register/mcp")
-    async def register_mcp(url: str):
+    async def register_mcp(url: str, channels: str = "#public"):
         """
         Dynamically register a new MCP Server URL in runtime, index its tools in FAISS, and persist it.
         """
@@ -236,6 +427,10 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         new_tools = await discover_tools([url])
         if not new_tools:
             raise HTTPException(status_code=400, detail=f"Failed to discover MCP tools at {url}")
+            
+        channel_list = [ch.strip() for ch in channels.split(",") if ch.strip()]
+        for tool_name in new_tools:
+            new_tools[tool_name]["channels"] = channel_list
             
         ROUTER.update_registry(new_tools)
         ROUTER.build_index()

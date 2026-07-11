@@ -60,14 +60,21 @@ The BFA Gateway uses semantic embeddings to index agent/tool metadata in FAISS. 
 
 ---
 
-## Quick Start & Running the Demo
+## Installation
 
-### 1. Install Dependencies
+You can install the BFA SDK directly from GitHub using `pip`:
+
 ```bash
-pip install -r requirements.txt
-# Optional: install in editable development mode
-pip install -e .
+# Install the development version from the main branch
+pip install git+https://github.com/SandroG1977/bfa-sdk.git
+
+# Or install a specific version with the secure IRC-A protocol support
+pip install git+https://github.com/SandroG1977/bfa-sdk.git@feature/docstrings-init
 ```
+
+---
+
+## Running the Demo
 
 ### 2. Run the MDBank Demo
 The demo launches three mock servers in the background:

@@ -12,5 +12,5 @@ mangum
 openai
 pytest
 pytest-cov
-
-
+pyjwt
+cryptography

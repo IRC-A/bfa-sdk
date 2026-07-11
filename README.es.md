@@ -60,14 +60,21 @@ El BFA Gateway utiliza embeddings semánticos para indexar la metadata de agente
 
 ---
 
-## Instalación y Ejecución de la Demo
+## Instalación
 
-### 1. Instalar dependencias
+Podés instalar la SDK de BFA directamente desde GitHub usando `pip`:
+
 ```bash
-pip install -r requirements.txt
-# Opcional: instalar en modo de desarrollo editable
-pip install -e .
+# Instalar la versión en desarrollo desde la rama principal (main)
+pip install git+https://github.com/SandroG1977/bfa-sdk.git
+
+# O instalar la versión específica con el protocolo de seguridad IRC-A
+pip install git+https://github.com/SandroG1977/bfa-sdk.git@feature/docstrings-init
 ```
+
+---
+
+## Ejecución de la Demo
 
 ### 2. Ejecutar la Demo MDBank
 La demo inicia tres servidores de simulación en segundo plano:

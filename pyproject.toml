@@ -27,7 +27,9 @@ dependencies = [
     "fastmcp",
     "pyyaml",
     "mangum",
-    "openai"
+    "openai",
+    "pyjwt",
+    "cryptography"
 ]
 requires-python = ">=3.10"
 

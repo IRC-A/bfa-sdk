@@ -61,7 +61,8 @@ class BFASemanticRouter:
         query: str, 
         top_k: int = 3, 
         threshold: float = 0.3, 
-        filter_type: Optional[str] = None
+        filter_type: Optional[str] = None,
+        agent_channels: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Resolves the query to the best matching agent or tool from FAISS index.
@@ -90,6 +91,12 @@ class BFASemanticRouter:
             # Filter by type if requested
             if filter_type and item.get("type") != filter_type:
                 continue
+
+            # Filter by channel overlap (Logical Channel Masking)
+            if agent_channels is not None:
+                item_channels = item.get("channels", ["#public"])
+                if not any(ch in item_channels for ch in agent_channels):
+                    continue
 
             # Convert L2 distance squared to Cosine Similarity in [0.0, 1.0] range
             # Assuming unit-normalized vectors: CosSim = 1.0 - (L2_dist_squared / 4.0)
