@@ -1,5 +1,9 @@
 # Backend for Agents SDK (BFA)
 # Version 0.1.0
+"""
+BFA SDK: A lightweight framework for Backend for Agents (BFA) architecture with FAISS semantic routing.
+"""
+
 
 from bfa_sdk.core.agent import BFAAgent
 from bfa_sdk.core.mcp import BFAMCP

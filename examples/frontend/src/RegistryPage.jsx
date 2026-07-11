@@ -7,9 +7,7 @@ export default function RegistryPage() {
     const { updateState } = useAppState();
     const [skills, setSkills] = useState({});
     const [loading, setLoading] = useState(false);
-    const [registerUrl, setRegisterUrl] = useState("");
-    const [registerType, setRegisterType] = useState("agent");
-    const [message, setMessage] = useState({ text: "", type: "" });
+    // Read-only central registry dashboard
 
     // Fetch active BFA gateway registry
     async function fetchRegistry() {
@@ -31,31 +29,7 @@ export default function RegistryPage() {
         fetchRegistry();
     }, []);
 
-    // Handle new self-registration
-    async function handleRegister(e) {
-        e.preventDefault();
-        if (!registerUrl.trim()) return;
-
-        setMessage({ text: "Conectando al servidor IRC-A...", type: "info" });
-        try {
-            const endpoint = registerType === "agent" ? "register/agent" : "register/mcp";
-            const response = await fetch(`http://localhost:8000/${endpoint}?url=${encodeURIComponent(registerUrl.trim())}`, {
-                method: "POST"
-            });
-
-            const data = await response.json();
-            if (response.ok) {
-                setMessage({ text: `¡Registro exitoso! Servidor indexado en FAISS.`, type: "success" });
-                setRegisterUrl("");
-                fetchRegistry(); // Reload active list
-            } else {
-                setMessage({ text: `Error de registro: ${data.detail || "URL no válida o inalcanzable"}`, type: "error" });
-            }
-        } catch (err) {
-            console.error("Registration error:", err);
-            setMessage({ text: "Error de red al conectar con el Gateway central de BFA.", type: "error" });
-        }
-    }
+    // Programmatic node registration is performed via authenticated API calls (cURL)
 
     const agentsList = Object.entries(skills).filter(([_, item]) => item.type === "agent");
     const toolsList = Object.entries(skills).filter(([_, item]) => item.type === "tool");
@@ -83,60 +57,29 @@ export default function RegistryPage() {
 
                 {/* Main section: Form + Stats */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* Register Form */}
-                    <div className="lg:col-span-2 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col justify-between">
-                        <form onSubmit={handleRegister} className="flex flex-col gap-4">
-                            <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                                <span>⚡</span> Conectar Nuevo Agente / MCP en Caliente
-                            </h2>
-                            <p className="text-gray-400 text-xs">
-                                Ingresa el endpoint del microservicio que deseas acoplar a la red. El servidor extraerá sus metadatos e indexará sus capacidades dinámicamente en FAISS.
-                            </p>
+                    {/* Programmatic Registration Info (Corporate Style) */}
+                    <div className="lg:col-span-2 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col gap-4">
+                        <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                            <span>💻</span> Registro de Servicios Programático (cURL)
+                        </h2>
+                        <p className="text-gray-400 text-xs leading-relaxed">
+                            Para registrar dinámicamente un nuevo agente o servidor MCP en la red IRC-A, realiza una petición POST al Gateway. La indexación en el pool semántico de FAISS se ejecutará automáticamente en caliente.
+                        </p>
 
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-2">
-                                <div className="md:col-span-3">
-                                    <label className="block text-xs font-semibold text-gray-400 mb-1">URL del Endpoint</label>
-                                    <input 
-                                        type="url" 
-                                        placeholder="http://127.0.0.1:8004"
-                                        value={registerUrl}
-                                        onChange={(e) => setRegisterUrl(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-blue-500 text-sm"
-                                        required
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-400 mb-1">Tipo de Servicio</label>
-                                    <select 
-                                        value={registerType}
-                                        onChange={(e) => setRegisterType(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-blue-500 text-sm h-[38px]"
-                                    >
-                                        <option value="agent">Agente (A2A)</option>
-                                        <option value="mcp">Servidor MCP</option>
-                                    </select>
-                                </div>
+                        <div className="flex flex-col gap-3 mt-2">
+                            <div>
+                                <span className="text-xs font-semibold text-blue-400 block mb-1">Registrar un Agente (A2A):</span>
+                                <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
+                                    {`curl -X POST "http://localhost:8000/register/agent?url=http://127.0.0.1:8004"`}
+                                </pre>
                             </div>
-
-                            <button 
-                                type="submit"
-                                className="w-full md:w-auto self-end px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg font-bold text-sm shadow-lg transition mt-2"
-                            >
-                                Registrar y Re-Indexar
-                            </button>
-                        </form>
-
-                        {/* Status Message */}
-                        {message.text && (
-                            <div className={`mt-4 p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
-                                message.type === "success" ? "bg-green-900/50 border border-green-800 text-green-300" :
-                                message.type === "error" ? "bg-red-900/50 border border-red-800 text-red-300" :
-                                "bg-blue-900/50 border border-blue-800 text-blue-300"
-                            }`}>
-                                <span>{message.type === "success" ? "✅" : message.type === "error" ? "❌" : "ℹ️"}</span>
-                                {message.text}
+                            <div>
+                                <span className="text-xs font-semibold text-indigo-400 block mb-1">Registrar un Servidor MCP:</span>
+                                <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
+                                    {`curl -X POST "http://localhost:8000/register/mcp?url=http://127.0.0.1:8001"`}
+                                </pre>
                             </div>
-                        )}
+                        </div>
                     </div>
 
                     {/* Stats Card */}

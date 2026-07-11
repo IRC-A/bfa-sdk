@@ -263,16 +263,59 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         agent_url = best["data"]["url"]
         
-        # Forward request to A2A Agent
+        # 1. Translate the incoming payload to A2A SendMessage format
+        a2a_payload = {
+            "jsonrpc": "2.0",
+            "method": "SendMessage",
+            "params": {
+                "message": {
+                    "role": 1, # ROLE_USER
+                    "message_id": "bfa-msg-id",
+                    "context_id": "bfa-session-id",
+                    "parts": [
+                        {
+                            "text": query
+                        }
+                    ]
+                }
+            },
+            "id": payload.get("id", 1) if payload else 1
+        }
+        
+        # 2. Forward request to A2A Agent with required version headers
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.post(agent_url, json=payload or {})
-                return response.json()
+                response = await client.post(
+                    agent_url, 
+                    json=a2a_payload,
+                    headers={"A2A-Version": "1.0"}
+                )
+                response_json = response.json()
             except Exception as e:
                 raise HTTPException(
                     status_code=502, 
                     detail=f"Failed to forward request to Agent at {agent_url}: {e}"
                 )
+                
+        # 3. Translate the outgoing A2A response back to the frontend format
+        if "error" in response_json:
+            return response_json
+            
+        text_response = "Sin respuesta estructurada del agente."
+        if "result" in response_json and "message" in response_json["result"]:
+            parts = response_json["result"]["message"].get("parts", [])
+            if parts:
+                text_response = parts[0].get("text", "")
+                
+        return {
+            "jsonrpc": "2.0",
+            "result": {
+                "output": {
+                    "text": text_response
+                }
+            },
+            "id": response_json.get("id", 1)
+        }
 
     return app
 

@@ -1,8 +1,9 @@
-# Backend for Agents SDK (BFA)
+# Backend for Agents SDK (BFA) e Protocolo IRC-A
 
-Um framework e SDK genérico e opinado para implementar o padrão **BFA (Backend for Agents)**, com suporte nativo a **Roteamento Semântico baseado em FAISS (busca vetorial)** e abstrações padronizadas para Agentes A2A e Servidores MCP.
+Um framework e SDK genérico e opinado para implementar o padrão **BFA (Backend for Agents)** e o protocolo **IRC-A (Internet Relay Chat for Agents)**, com suporte nativo a **Roteamento Semântico baseado em FAISS (busca vetorial)**, limites de segurança assimétricos de confiança zero (zero-trust) e abstrações padronizadas para Agentes A2A e Servidores MCP.
 
-Projetado para estender e atualizar o roteador tradicional BM25 baseado em palavras-chave, aproveitando buscas vetoriais semânticas para resolver ferramentas e agentes de forma dinâmica.
+Leia a especificação oficial do protocolo:
+👉 **[Whitepaper do Protocolo IRC-A (v1.0.0)](IRC-A_Whitepaper.md)** - *Redes de Agentes Descentralizadas, Roteamento Semântico de Capacidades e Arquitetura de Software Segura por Design.*
 
 ---
 
@@ -12,9 +13,9 @@ Projetado para estender e atualizar o roteador tradicional BM25 baseado em palav
 
 ---
 
-## Arquitetura do Protocolo BFA
+## Arquitetura do Protocolo BFA / IRC-A
 
-O BFA Gateway atua como uma camada de middleware semântico entre os canais de consumo (ex: UIs de mensagens, sistemas de chat) e agentes ou ferramentas especializadas.
+O BFA Gateway atua como uma camada de middleware semântico e bróker de registro entre os canais de consumo (ex: UIs de mensagens, sistemas de chat) e agentes ou ferramentas especializadas.
 
 ```mermaid
 graph TD
@@ -37,7 +38,25 @@ graph TD
 1. **Roteamento Semântico baseado em FAISS:** Em vez de fazer correspondência exata de palavras-chave (como o BM25), o BFA Gateway indexa as descrições, tags e exemplos dos agentes e ferramentas em um índice vetorial local FAISS. Isso resolve consultas mesmo quando sinônimos são usados (ex: associar *"plástico"* a *"cartão de crédito"*).
 2. **Abstração `BFAAgent`:** Simplifica a criação de agentes A2A usando o `a2a-sdk` e Starlette. Força a declaração de metadatos essenciais (`tags`, `examples`, `description`) exigidos para a indexação vetorial.
 3. **Abstração `BFAMCP`:** Envolve e estende servidores `FastMCP`. Expõe automaticamente um endpoint padronizado `/tools` contendo schemas de entrada, descrições e tags/exemplos customizados para descoberta.
-4. **Pronto para Serverless (AWS Lambda):** Inclui um adaptador **Mangum** embutido no Gateway. Combinado com o driver de nuvem `OpenAIEmbedder`, o BFA Gateway roda em Lambda sob demanda com cold-start zero.
+4. **Segurança IRC-A Segura por Design (Roadmap):** Emprega handshakes de registro usando challenge-response assimétrico, mascaramento de canais lógicos (via variáveis `.env` de nível de contêiner `IRCA_CHANNELS`) para segregar espaços de busca vetorial, e tokens DET (Delegated Execution Tokens) efêmeros para habilitar a invocação direta P2P descentralizada sem gargalos no gateway.
+5. **Pronto para Serverless (AWS Lambda):** Inclui um adaptador **Mangum** embutido no Gateway. Combinado com o driver de nuvem `OpenAIEmbedder`, o BFA Gateway roda em Lambda sob demanda com cold-start zero.
+
+---
+
+## Configuração de Provedores de Embeddings e Chunking
+
+O BFA Gateway utiliza embeddings semânticos para indexar a metadata de agentes e ferramentas no FAISS. É possível selecionar o provedor usando variáveis de ambiente:
+
+| Modo / Provedor | Variáveis de Ambiente | Dependências | Descrição |
+|---|---|---|---|
+| **Local Real (Padrão)** | Nenhuma | `bfa-sdk[local]` | Utiliza `sentence-transformers` de forma local. Recomendado para ambientes Python <= 3.12. |
+| **OpenAI (Nuvem)** | `BFA_USE_OPENAI_EMBEDDINGS=true`, `OPENAI_API_KEY="..."` | `openai` | Consulta o endpoint `text-embedding-3-small` da OpenAI. Ideal para implantações serverless (AWS Lambda). |
+| **Mock Offline (Feature Hashing)** | `BFA_USE_MOCK_EMBEDDINGS=true` | Nenhuma | Utiliza a técnica estável MD5 Feature Hashing para rotear com base em correspondência de palavras-chave. Rápido e sem dependências externas. |
+
+> [!NOTE]
+> **Por que não há Chunking (Fragmentação) no Gateway?**
+> O BFA Gateway atua como um roteador semântico de serviços, não como um motor de busca documental (RAG). Ele indexa fichas curtas de metadatos (nomes, descrições, tags e exemplos) que cabem perfeitamente dentro do limite de tokens do embedding.
+> Se você precisar de **Document Chunking** (RAG sobre PDFs ou manuais extensos), esse processo deve ser executado **dentro do banco de dados ou lógica interna de cada Agente A2A específico**, mantendo o Gateway leve e desacoplado.
 
 ---
 

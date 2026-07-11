@@ -11,4 +11,6 @@ pyyaml
 mangum
 openai
 pytest
+pytest-cov
+
 

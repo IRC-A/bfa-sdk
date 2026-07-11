@@ -81,13 +81,25 @@ class DummyEmbedder(AbstractEmbedder):
         self.dimension = dimension
 
     def embed_query(self, text: str) -> List[float]:
-        import random
+        import re
+        import hashlib
         import math
-        # Generate stable mock vectors for the same text input
-        state = hash(text) & 0xffffffff
-        random.seed(state)
-        vec = [random.uniform(-1.0, 1.0) for _ in range(self.dimension)]
         
+        # Tokenize and lowercase words
+        words = re.findall(r'\w+', text.lower())
+        
+        vec = [0.0] * self.dimension
+        if not words:
+            # Fallback for empty strings
+            vec[0] = 1.0
+            return vec
+            
+        for word in words:
+            # Use md5 for stable hash mapping across processes
+            h = hashlib.md5(word.encode("utf-8")).hexdigest()
+            idx = int(h, 16) % self.dimension
+            vec[idx] += 1.0
+            
         # Normalize to unit length (L2 norm = 1.0)
         norm = math.sqrt(sum(x*x for x in vec))
         if norm > 0:

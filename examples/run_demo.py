@@ -51,6 +51,12 @@ def main():
         [sys.executable, "examples/mock_tarjetas_agent.py"]
     )
     
+    # 4b. Launch Mock Clima Agent Server (Port 8004)
+    print("Launching mock Clima Agent Server on port 8004...")
+    clima_proc = subprocess.Popen(
+        [sys.executable, "examples/mock_clima_agent.py"]
+    )
+    
     # Wait for servers to spin up
     print("Waiting 4 seconds for mock servers to initialize...")
     time.sleep(4)
@@ -82,6 +88,14 @@ def main():
         print(f"BFA Response: {res.json()}")
     except Exception as e:
         print(f"Tarjetas Agent registration failed: {e}")
+        
+    # Register Clima Agent
+    print("Registering Clima Agent (http://127.0.0.1:8004)...")
+    try:
+        res = httpx.post(f"{gateway_url}/register/agent", params={"url": "http://127.0.0.1:8004"})
+        print(f"BFA Response: {res.json()}")
+    except Exception as e:
+        print(f"Clima Agent registration failed: {e}")
         
     print("\nDiscovery completed dynamically! FAISS Index rebuilt in real-time.")
 
@@ -151,11 +165,33 @@ def main():
     except Exception as e:
         print(f"Test failed: {e}")
 
+    print("\n--- TEST 6: Dynamic Agent Invocation (Routing to Clima) ---")
+    query_6 = "temperatura en madrid"
+    print(f"Invoking best agent for: '{query_6}'")
+    try:
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "method": "agent.execute",
+            "params": {
+                "user_input": {
+                    "text": query_6
+                }
+            },
+            "id": 1
+        }
+        res = httpx.post(f"{gateway_url}/invoke", params={"query": query_6}, json=rpc_payload)
+        print(f"Status: {res.status_code}")
+        print("Response from routed agent:")
+        print(res.json())
+    except Exception as e:
+        print(f"Test failed: {e}")
+
     # Cleanup subprocesses
     print("\nShutting down mock subprocesses...")
     mcp_proc.terminate()
     cuentas_proc.terminate()
     tarjetas_proc.terminate()
+    clima_proc.terminate()
     print("Demo execution finished.")
 
 if __name__ == "__main__":

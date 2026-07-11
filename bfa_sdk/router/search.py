@@ -91,9 +91,10 @@ class BFASemanticRouter:
             if filter_type and item.get("type") != filter_type:
                 continue
 
-            # Convert L2 distance to similarity score in [0.0, 1.0] range
-            # distance of 0.0 -> similarity 1.0
-            similarity = float(1.0 / (1.0 + dist))
+            # Convert L2 distance squared to Cosine Similarity in [0.0, 1.0] range
+            # Assuming unit-normalized vectors: CosSim = 1.0 - (L2_dist_squared / 4.0)
+            similarity = float(1.0 - (dist / 4.0))
+            similarity = max(0.0, min(1.0, similarity))
 
             candidates.append({
                 "skill": skill_id,
