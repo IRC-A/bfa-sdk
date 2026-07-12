@@ -780,6 +780,15 @@ def test_discover_success_flow():
     assert decoded["permitted_action"] == "apply_loan"
     assert decoded["restricted_params"]["customer_id"] == "992"
     
+    # Call /discover with campaign_id pattern (covers the campaign query extraction line in gateway.py)
+    res_camp = client.post("/discover?query=process keywords for campaign camp-777", json={
+        "session_token": session_token
+    })
+    assert res_camp.status_code == 200
+    data_camp = res_camp.json()
+    decoded_camp = jwt.decode(data_camp["det"], GATEWAY_PUBLIC_KEY, algorithms=["RS256"], audience="mock_skill")
+    assert decoded_camp["restricted_params"]["campaign_id"] == "camp-777"
+    
     # Test /register/disconnect with registered node (line 303 in gateway.py)
     client.post("/register/init", json={"node_id": "disc-node"})
     res_disc = client.post("/register/disconnect", json={"node_id": "disc-node"})
@@ -918,6 +927,165 @@ def test_abstract_embedder_and_agent_no_gateway():
         gateway_url=None
     )
     assert agent._auto_register_to_gateway() is False
+
+
+@pytest.mark.anyio
+async def test_mcp_custom_post_tools_route_and_lazy_load(monkeypatch):
+    """
+    Tests BFAMCP's custom POST /tools route (lines 56-82 in mcp.py)
+    and lazy-loading Gateway public keys during registration in both BFAAgent and BFAMCP.
+    """
+    from starlette.testclient import TestClient
+    from unittest.mock import MagicMock
+    import httpx
+    
+    # 1. Test POST /tools endpoint
+    mcp = BFAMCP("test-mcp-custom-post")
+    
+    @mcp.tool(name="custom_tool")
+    def custom_tool(delegated_token: str, val: int) -> str:
+        return f"VAL: {val}"
+        
+    client = TestClient(mcp.app)
+    
+    # A. Missing 'tool' key in body
+    res = client.post("/tools", json={})
+    assert res.status_code == 400
+    assert "Missing 'tool' field" in res.text
+    
+    # B. Invalid token / Validation failure (should return 400 ValueError)
+    res = client.post("/tools", json={
+        "tool": "custom_tool",
+        "arguments": {"delegated_token": "invalid-token", "val": 42}
+    })
+    assert res.status_code == 400
+    assert "Token validation failed" in res.text
+    
+    # C. Call non-existent tool (should return 500 error)
+    res = client.post("/tools", json={
+        "tool": "non_existent_tool",
+        "arguments": {}
+    })
+    assert res.status_code == 500
+
+    # D. Invalid JSON body formatting (covers ValueError catch on request.json())
+    res = client.post("/tools", content="bad-json-syntax", headers={"Content-Type": "application/json"})
+    assert res.status_code == 400
+
+    # E. Successful tool call with valid DET token (covers output formatting branches)
+    import time
+    det = jwt.encode(
+        {
+            "sub": "caller",
+            "aud": "test-mcp-custom-post",
+            "permitted_action": "custom_tool",
+            "restricted_params": {"val": 42},
+            "exp": int(time.time()) + 60
+        },
+        TEST_PRIVATE_KEY,
+        algorithm="RS256"
+    )
+    mcp.gateway_public_key = TEST_PUBLIC_KEY
+    res = client.post("/tools", json={
+        "tool": "custom_tool",
+        "arguments": {"delegated_token": det, "val": 42}
+    })
+    assert res.status_code == 200
+    assert "VAL: 42" in res.text
+
+    # F. Audience mismatch verification (covers verify_incoming_det line 201)
+    det_bad_aud = jwt.encode(
+        {
+            "sub": "caller",
+            "aud": "wrong-audience",
+            "permitted_action": "custom_tool",
+            "exp": int(time.time()) + 60
+        },
+        TEST_PRIVATE_KEY,
+        algorithm="RS256"
+    )
+    assert mcp.verify_incoming_det(det_bad_aud, "custom_tool", {}) is False
+
+    # G. Cover fallback formatting branches (77-82 in mcp.py)
+    import types
+    # 1. Iterable list format
+    mock_tc = MagicMock()
+    mock_tc.text = "mock-text-1"
+    async def mock_call_list(self_obj, name, args):
+        return [mock_tc]
+    mcp.mcp.call_tool = types.MethodType(mock_call_list, mcp.mcp)
+    res = client.post("/tools", json={"tool": "custom_tool", "arguments": {"delegated_token": det, "val": 42}})
+    assert res.status_code == 200
+    assert "mock-text-1" in res.text
+
+    # 2. Object with text attribute
+    class MockTextObj:
+        def __init__(self, text):
+            self.text = text
+    mock_obj = MockTextObj("mock-text-2")
+    async def mock_call_obj(self_obj, name, args):
+        return mock_obj
+    mcp.mcp.call_tool = types.MethodType(mock_call_obj, mcp.mcp)
+    res = client.post("/tools", json={"tool": "custom_tool", "arguments": {"delegated_token": det, "val": 42}})
+    assert res.status_code == 200
+    assert "mock-text-2" in res.text
+
+    # 3. Else fallback string conversion
+    async def mock_call_else(self_obj, name, args):
+        return 12345
+    mcp.mcp.call_tool = types.MethodType(mock_call_else, mcp.mcp)
+    res = client.post("/tools", json={"tool": "custom_tool", "arguments": {"delegated_token": det, "val": 42}})
+    assert res.status_code == 200
+    assert "12345" in res.text
+
+    # 4. Cover ValueError catch (line 87 in mcp.py)
+    async def mock_raise_val_err(self_obj, name, args):
+        raise ValueError("test-val-err")
+    mcp.mcp.call_tool = types.MethodType(mock_raise_val_err, mcp.mcp)
+    res = client.post("/tools", json={"tool": "custom_tool", "arguments": {"delegated_token": det, "val": 42}})
+    assert res.status_code == 400
+    assert "test-val-err" in res.text
+    
+    # 2. Test lazy-loading public key in BFAAgent and BFAMCP registration
+    # Mock post to return 200/challenge
+    async def mock_get_public_key(self, url, *args, **kwargs):
+        mock_resp = MagicMock()
+        if "public_key" in str(url):
+            mock_resp.status_code = 200
+            mock_resp.json = lambda: {"public_key": TEST_PUB_PEM}
+        elif "register/init" in str(url):
+            mock_resp.status_code = 200
+            mock_resp.json = lambda: {"challenge_bytes": "challenge"}
+        elif "register/verify" in str(url):
+            mock_resp.status_code = 200
+            mock_resp.json = lambda: {"session_token": "token", "expiry": 100}
+        else:
+            mock_resp.status_code = 200
+        return mock_resp
+        
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get_public_key)
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_get_public_key)
+    
+    # Create agent and mcp with gateway_public_key=None, and verify registration fetches the key!
+    mcp_lazy = BFAMCP("lazy-mcp", gateway_url="http://localhost:8000")
+    mcp_lazy.gateway_public_key = None
+    success_mcp = await mcp_lazy.register_with_gateway("http://localhost:8000", "http://localhost:8012")
+    assert success_mcp is True
+    assert mcp_lazy.gateway_public_key is not None
+    
+    agent_lazy = MockSecureAgent(
+        agent_id="lazy-agent",
+        name="Lazy Agent",
+        description="test",
+        tags=["t"],
+        examples=["ex"],
+        url="http://localhost:8039",
+        gateway_url="http://localhost:8000"
+    )
+    agent_lazy.gateway_public_key = None
+    success_agent = await agent_lazy.register_with_gateway("http://localhost:8000")
+    assert success_agent is True
+    assert agent_lazy.gateway_public_key is not None
 
 
 

@@ -53,6 +53,43 @@ class BFAMCP:
         async def list_tools_endpoint(request: Request) -> JSONResponse:
             return await self._list_tools_handler()
 
+        # Custom POST endpoint for direct P2P HTTP tool calls
+        @self.mcp.custom_route("/tools", methods=["POST"])
+        async def call_tool_endpoint(request: Request) -> JSONResponse:
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            
+            tool_name = body.get("tool")
+            arguments = body.get("arguments", {})
+            
+            if not tool_name:
+                return JSONResponse(status_code=400, content="Missing 'tool' field in request body")
+                
+            try:
+                # Invoke the tool via FastMCP's call_tool
+                result_objects = await self.mcp.call_tool(tool_name, arguments)
+                # Format text content list to string
+                result_text = ""
+                if hasattr(result_objects, "content") and result_objects.content:
+                    result_text = "\n".join([c.text for c in result_objects.content if hasattr(c, "text")])
+                elif result_objects and hasattr(result_objects, "__iter__") and not isinstance(result_objects, (str, bytes)):
+                    result_text = "\n".join([r.text for r in result_objects if hasattr(r, "text")])
+                elif hasattr(result_objects, "text"):
+                    result_text = result_objects.text
+                else:
+                    result_text = str(result_objects)
+                    
+                return JSONResponse(status_code=200, content=result_text)
+            except ValueError as val_err:
+                # DET validation or parameter lockdown failures return 400
+                return JSONResponse(status_code=400, content=str(val_err))
+            except Exception as e:
+                if "DET Token validation failed" in str(e):
+                    return JSONResponse(status_code=400, content=str(e))
+                return JSONResponse(status_code=500, content=f"Tool execution failed: {e}")
+
         # Cache Starlette/ASGI app and register shutdown hook to disconnect cleanly
         self._asgi_app = self.mcp.http_app()
         async def shutdown_event():
@@ -156,9 +193,13 @@ class BFAMCP:
                 delegated_token,
                 self.gateway_public_key,
                 algorithms=["RS256"],
-                audience=self.node_id
+                options={"verify_aud": False}
             )
             
+            # Audience validation (accepts server node_id or expected_action)
+            if decoded_det.get("aud") not in (self.node_id, expected_action):
+                return False
+                
             # Scope validation
             if decoded_det.get("permitted_action") != expected_action:
                 return False
@@ -211,6 +252,10 @@ class BFAMCP:
         from cryptography.hazmat.primitives.asymmetric import padding
         from cryptography.hazmat.primitives import hashes
         
+        import asyncio
+        # Delay slightly to allow the local FastMCP port to bind and listen
+        await asyncio.sleep(1.0)
+        
         self.gateway_url = gateway_url
         init_url = f"{gateway_url.rstrip('/')}/register/init"
         verify_url = f"{gateway_url.rstrip('/')}/register/verify"
@@ -219,6 +264,17 @@ class BFAMCP:
         try:
             # 1. Initialize
             async with httpx.AsyncClient() as client:
+                # Try to download gateway public key if still missing
+                if not self.gateway_public_key:
+                    try:
+                        res_pub = await client.get(f"{gateway_url.rstrip('/')}/public_key", timeout=5)
+                        if res_pub.status_code == 200:
+                            pem_str = res_pub.json().get("public_key")
+                            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+                            self.gateway_public_key = load_pem_public_key(pem_str.encode("utf-8"))
+                    except Exception as e:
+                        print(f"BFAMCP Warning: Could not download gateway public key during registration: {e}")
+
                 res = await client.post(init_url, json={"node_id": self.node_id, "channels": self.channels}, timeout=5)
                 if res.status_code in (404, 405, 501):
                     raise NotImplementedError("Gateway does not support cryptographic challenge-response")

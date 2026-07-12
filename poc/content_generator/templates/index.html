@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BFA / IRC-A Security Protocol Visualizer</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #080b11;
+            --panel-bg: rgba(17, 22, 34, 0.75);
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-yellow: #f59e0b;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-color: #f3f4f6;
+            --text-muted: #9ca3af;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(at 10% 10%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
+                radial-gradient(at 90% 90%, rgba(139, 92, 246, 0.08) 0px, transparent 50%);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 40px;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(8, 11, 17, 0.8);
+            backdrop-filter: blur(8px);
+            z-index: 10;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+        }
+
+        .logo-text {
+            font-weight: 800;
+            font-size: 1.25rem;
+            letter-spacing: 1px;
+            background: linear-gradient(to right, #ffffff, #9ca3af);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-panel {
+            display: flex;
+            gap: 20px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--accent-green);
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 30px;
+            padding: 30px 40px;
+            flex-grow: 1;
+            max-width: 1600px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .glass-panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            transition: all 0.3s ease;
+        }
+
+        .glass-panel:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        h2 {
+            font-weight: 600;
+            margin-bottom: 20px;
+            font-size: 1.4rem;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-color);
+            padding: 15px;
+            font-family: inherit;
+            font-size: 1rem;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+
+        textarea:focus {
+            border-color: var(--accent-blue);
+        }
+
+        .action-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 0.95rem;
+            border-radius: 10px;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            color: #ffffff;
+            border: none;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-warning {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fcd34d;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .btn-warning:hover {
+            background: rgba(245, 158, 11, 0.25);
+        }
+
+        .response-container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            margin-top: 20px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 20px;
+            min-height: 250px;
+            overflow-y: auto;
+        }
+
+        .response-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .response-body {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+
+        .visual-flow {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+        }
+
+        .flow-step {
+            display: flex;
+            gap: 16px;
+            position: relative;
+            padding-bottom: 20px;
+        }
+
+        .flow-step:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            left: 20px;
+            top: 40px;
+            bottom: -10px;
+            width: 2px;
+            background-color: var(--border-color);
+            z-index: 1;
+        }
+
+        .flow-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.03);
+            border: 2px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+            transition: all 0.3s ease;
+            font-size: 1.2rem;
+        }
+
+        .flow-content {
+            flex-grow: 1;
+            padding-top: 6px;
+        }
+
+        .flow-title {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 4px;
+        }
+
+        .flow-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        /* Dynamic states for visual flows */
+        .step-active .flow-icon {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .step-success .flow-icon {
+            border-color: var(--accent-green);
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .step-success:not(:last-child)::after {
+            background-color: var(--accent-green);
+        }
+
+        .step-error .flow-icon {
+            border-color: var(--accent-red);
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .step-warning .flow-icon {
+            border-color: var(--accent-yellow);
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        /* Spinner for loading state */
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-area">
+            <div class="logo-icon"></div>
+            <span class="logo-text">BFA / IRC-A PROTOCOL VISUALIZER</span>
+        </div>
+        <div class="status-panel">
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                Gateway (:8000)
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                Writer Agent (:8101)
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                Keywords MCP (:8102)
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                Reviewer Agent (:8103)
+            </div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Interactive Control Console -->
+        <div class="glass-panel">
+            <h2>
+                Interactive Agent Control Console
+                <span class="badge" id="api-status-badge">Simulator Mode</span>
+            </h2>
+            <div class="input-group">
+                <label for="prompt-input" style="font-size: 0.9rem; color: var(--text-muted);">Enter Campaign Task / Topic instructions:</label>
+                <textarea id="prompt-input" placeholder="e.g. generate essay for campaign camp-123 on topic: AI Automation">generate essay for campaign camp-123 on topic: AI Automation</textarea>
+            </div>
+            <div class="action-buttons">
+                <button class="btn-primary" id="btn-run-normal">
+                    <span class="spinner hidden" id="spinner-normal"></span>
+                    Run Collaborative Flow
+                </button>
+                <button class="btn-danger" id="btn-run-hack">
+                    <span class="spinner hidden" id="spinner-hack"></span>
+                    Simulate Campaign Bypass Hack
+                </button>
+                <button class="btn-warning" id="btn-run-loop">
+                    <span class="spinner hidden" id="spinner-loop"></span>
+                    Simulate Agent Circular Loop
+                </button>
+            </div>
+
+            <!-- Langsmith Token Metrics Dashboard -->
+            <div class="hidden" id="token-metrics-card" style="margin-top: 20px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 10px; padding: 15px;">
+                <div style="font-size: 0.85rem; text-transform: uppercase; color: var(--accent-blue); font-family: 'JetBrains Mono', monospace; font-weight: bold; margin-bottom: 10px;">📊 Langsmith Token Metrics Tracker</div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center;">
+                    <div style="background: rgba(0, 0, 0, 0.2); padding: 10px; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">Prompt Tokens</div>
+                        <div id="metric-prompt" style="font-size: 1.2rem; font-weight: bold; color: var(--text-color); margin-top: 4px;">0</div>
+                    </div>
+                    <div style="background: rgba(0, 0, 0, 0.2); padding: 10px; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">Completion Tokens</div>
+                        <div id="metric-completion" style="font-size: 1.2rem; font-weight: bold; color: var(--text-color); margin-top: 4px;">0</div>
+                    </div>
+                    <div style="background: rgba(0, 0, 0, 0.2); padding: 10px; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">Total Tokens</div>
+                        <div id="metric-total" style="font-size: 1.2rem; font-weight: bold; color: var(--accent-purple); margin-top: 4px;">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Beautiful Generated Essay Reading Preview Card -->
+            <div class="hidden" id="essay-output-card" style="margin-top: 20px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 12px; padding: 25px; box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);">
+                <div style="font-size: 0.85rem; text-transform: uppercase; color: var(--accent-green); font-family: 'JetBrains Mono', monospace; font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                    📝 Final Generated Article Copy
+                </div>
+                <div id="essay-output-body" style="font-family: 'Outfit', sans-serif; font-size: 1.05rem; line-height: 1.7; color: #e5e7eb; font-weight: 300; white-space: pre-wrap; font-style: italic;">
+                </div>
+            </div>
+
+            <div class="response-container">
+                <div class="response-title">Console Output Logs</div>
+                <div class="response-body" id="console-output">Welcome to the BFA Content Generator Playground. Choose a flow above to trigger the cryptographic protocol verification.</div>
+            </div>
+        </div>
+
+        <!-- Protocol Visual Flow Feed -->
+        <div class="glass-panel">
+            <h2>Visual Protocol Flow Sequence</h2>
+            <div class="visual-flow" id="flow-timeline">
+                <!-- Step 1: Handshake -->
+                <div class="flow-step" id="step-handshake">
+                    <div class="flow-icon">🔑</div>
+                    <div class="flow-content">
+                        <div class="flow-title">1. Asymmetric Cryptographic Handshake</div>
+                        <div class="flow-desc">Node registers with the BFA Gateway on startup using secure challenge-response RSA signing.</div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Semantic Discovery -->
+                <div class="flow-step" id="step-discovery">
+                    <div class="flow-icon">🛰️</div>
+                    <div class="flow-content">
+                        <div class="flow-title">2. Semantic Router Discovery</div>
+                        <div class="flow-desc">Gateway queries its FAISS semantic index to resolve target tool capabilities matching query context.</div>
+                    </div>
+                </div>
+
+                <!-- Step 3: DET Minting -->
+                <div class="flow-step" id="step-mint">
+                    <div class="flow-icon">🎟️</div>
+                    <div class="flow-content">
+                        <div class="flow-title">3. Ephemeral DET Issuance</div>
+                        <div class="flow-desc">Gateway mints a short-lived Delegated Execution Token (DET) binding active parameter restrictions (campaign_id).</div>
+                    </div>
+                </div>
+
+                <!-- Step 4: Direct P2P MCP Call -->
+                <div class="flow-step" id="step-p2p">
+                    <div class="flow-icon">⚡</div>
+                    <div class="flow-content">
+                        <div class="flow-title">4. Direct P2P Tool Invocation</div>
+                        <div class="flow-desc">Agent makes a direct call to the MCP server endpoint, carrying the DET payload for offline validation.</div>
+                    </div>
+                </div>
+
+                <!-- Step 5: Parameter Lockdown Check -->
+                <div class="flow-step" id="step-lockdown">
+                    <div class="flow-icon">🔒</div>
+                    <div class="flow-content">
+                        <div class="flow-title">5. Zero-Trust Parameter Lockdown</div>
+                        <div class="flow-desc">MCP server decrypts DET signature, verifying that target arguments match the locked-down token constraints.</div>
+                    </div>
+                </div>
+
+                <!-- Step 6: Agent-to-Agent Audit -->
+                <div class="flow-step" id="step-a2a">
+                    <div class="flow-icon">🤝</div>
+                    <div class="flow-content">
+                        <div class="flow-title">6. A2A Collaboration & Loop Trace</div>
+                        <div class="flow-desc">WriterAgent submits draft content to ReviewerAgent via A2A protocol. Request trace headers are verified.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check which API Provider is configured in the backend
+        async function checkApiStatus() {
+            try {
+                const res = await fetch("/api-status");
+                const data = await res.json();
+                const badge = document.getElementById("api-status-badge");
+                if (data.provider === "openai") {
+                    badge.textContent = "OpenAI GPT-4o Live";
+                    badge.style.background = "rgba(16, 185, 129, 0.15)";
+                    badge.style.color = "var(--accent-green)";
+                    badge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                } else if (data.provider === "gemini") {
+                    badge.textContent = "Google Gemini Live";
+                    badge.style.background = "rgba(16, 185, 129, 0.15)";
+                    badge.style.color = "var(--accent-green)";
+                    badge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                } else if (data.provider === "ollama") {
+                    badge.textContent = "Local Ollama Live";
+                    badge.style.background = "rgba(139, 92, 246, 0.15)";
+                    badge.style.color = "var(--accent-purple)";
+                    badge.style.borderColor = "rgba(139, 92, 246, 0.3)";
+                } else {
+                    badge.textContent = "Simulator Mode";
+                    badge.style.background = "rgba(255, 255, 255, 0.05)";
+                    badge.style.color = "var(--text-muted)";
+                    badge.style.borderColor = "var(--border-color)";
+                }
+            } catch (e) {
+                console.error("Failed to fetch API status", e);
+            }
+        }
+
+        // Dynamically fetch and display status indicators for all registered BFA nodes via server-side proxy
+        async function updateHeaderStatus() {
+            const statusPanel = document.querySelector(".status-panel");
+            if (!statusPanel) return;
+
+            try {
+                const res = await fetch("/api-status/nodes");
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // Clear and rebuild
+                statusPanel.innerHTML = "";
+
+                // Gateway indicator
+                const gwIndicator = document.createElement("div");
+                gwIndicator.className = "status-indicator";
+                gwIndicator.innerHTML = `
+                    <div class="status-dot" style="background-color: ${data.gateway_online ? 'var(--accent-green)' : 'var(--accent-red)'}; box-shadow: 0 0 8px ${data.gateway_online ? 'var(--accent-green)' : 'var(--accent-red)'};"></div>
+                    Gateway (:8000)
+                `;
+                statusPanel.appendChild(gwIndicator);
+
+                // Other nodes indicators
+                (data.nodes || []).forEach(node => {
+                    const indicator = document.createElement("div");
+                    indicator.className = "status-indicator";
+                    indicator.innerHTML = `
+                        <div class="status-dot" style="background-color: ${node.online ? 'var(--accent-green)' : 'var(--accent-red)'}; box-shadow: 0 0 8px ${node.online ? 'var(--accent-green)' : 'var(--accent-red)'};"></div>
+                        ${node.name}
+                    `;
+                    statusPanel.appendChild(indicator);
+                });
+            } catch (e) {
+                console.error("Failed to update status header via proxy", e);
+            }
+        }
+
+        // Initialize Timeline Visualizer
+        function resetTimeline() {
+            const steps = ["step-handshake", "step-discovery", "step-mint", "step-p2p", "step-lockdown", "step-a2a"];
+            steps.forEach(id => {
+                const el = document.getElementById(id);
+                el.className = "flow-step";
+            });
+        }
+
+        function setStepState(stepId, state) {
+            const el = document.getElementById(stepId);
+            if (el) {
+                el.className = `flow-step step-${state}`;
+            }
+        }
+
+        async function executeFlow(endpoint, promptText, spinnerId, buttonId) {
+            // Loading UI
+            document.getElementById(spinnerId).classList.remove("hidden");
+            const btn = document.getElementById(buttonId);
+            btn.disabled = true;
+            resetTimeline();
+            
+            const consoleOut = document.getElementById("console-output");
+            consoleOut.textContent = "Sending execution trigger, executing cryptographic registrations & handshake checks...\n";
+
+            try {
+                // Instantly active handshake since services are connected
+                setStepState("step-handshake", "success");
+
+                const res = await fetch(endpoint, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query: promptText })
+                });
+
+                const data = await res.json();
+                
+                // If token metrics are returned, display them
+                if (data.tokens && data.tokens.total_tokens > 0) {
+                    document.getElementById("token-metrics-card").classList.remove("hidden");
+                    document.getElementById("metric-prompt").textContent = data.tokens.prompt_tokens;
+                    document.getElementById("metric-completion").textContent = data.tokens.completion_tokens;
+                    document.getElementById("metric-total").textContent = data.tokens.total_tokens;
+                } else {
+                    document.getElementById("token-metrics-card").classList.add("hidden");
+                }
+
+                let resultText = data.result || data.error || "Unknown response";
+                consoleOut.textContent = resultText;
+
+                // Parse out the final essay
+                const finalEssayMatch = resultText.match(/=== Final Refined Essay ===\n([\s\S]+)/);
+                const essayCard = document.getElementById("essay-output-card");
+                const essayBody = document.getElementById("essay-output-body");
+                
+                if (finalEssayMatch && finalEssayMatch[1].trim()) {
+                    essayCard.classList.remove("hidden");
+                    essayBody.textContent = finalEssayMatch[1].trim();
+                } else {
+                    essayCard.classList.add("hidden");
+                    essayBody.textContent = "";
+                }
+
+                // Update visual flow steps based on response details
+                if (endpoint.includes("normal")) {
+                    setStepState("step-discovery", "success");
+                    setStepState("step-mint", "success");
+                    setStepState("step-p2p", "success");
+                    setStepState("step-lockdown", "success");
+                    setStepState("step-a2a", "success");
+                } else if (endpoint.includes("hack")) {
+                    setStepState("step-discovery", "success");
+                    setStepState("step-mint", "success");
+                    setStepState("step-p2p", "warning");
+                    setStepState("step-lockdown", "error");
+                    setStepState("step-a2a", "hidden");
+                } else if (endpoint.includes("loop")) {
+                    setStepState("step-discovery", "success");
+                    setStepState("step-mint", "success");
+                    setStepState("step-p2p", "success");
+                    setStepState("step-lockdown", "success");
+                    setStepState("step-a2a", "error");
+                }
+            } catch (e) {
+                consoleOut.textContent += `\nError executing flow: ${e.message}`;
+            } finally {
+                document.getElementById(spinnerId).classList.add("hidden");
+                btn.disabled = false;
+            }
+        }
+
+        // Add event listeners
+        document.getElementById("btn-run-normal").addEventListener("click", () => {
+            const prompt = document.getElementById("prompt-input").value;
+            executeFlow("/run-flow/normal", prompt, "spinner-normal", "btn-run-normal");
+        });
+
+        document.getElementById("btn-run-hack").addEventListener("click", () => {
+            const prompt = document.getElementById("prompt-input").value;
+            executeFlow("/run-flow/hack", prompt, "spinner-hack", "btn-run-hack");
+        });
+
+        document.getElementById("btn-run-loop").addEventListener("click", () => {
+            const prompt = document.getElementById("prompt-input").value;
+            executeFlow("/run-flow/loop", prompt, "spinner-loop", "btn-run-loop");
+        });
+
+        // Initialize status check and header status updates
+        checkApiStatus();
+        updateHeaderStatus();
+        setInterval(updateHeaderStatus, 2000);
+    </script>
+</body>
+</html>

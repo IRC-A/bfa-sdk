@@ -360,12 +360,16 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         target_node_id = best["skill"]
         target_type = best["type"]
         
-        # Simple customer ID extraction for parameter lockdown demo
+        # Simple customer/campaign ID extraction for parameter lockdown demo
         restricted_params = {}
         import re
         customer_match = re.search(r"customer\s+(?:id-)?(\w+)", query, re.IGNORECASE)
         if customer_match:
             restricted_params["customer_id"] = customer_match.group(1)
+            
+        campaign_match = re.search(r"campaign\s+(\S+)", query, re.IGNORECASE)
+        if campaign_match:
+            restricted_params["campaign_id"] = campaign_match.group(1)
             
         det_expiry = int(time.time()) + 60
         det = jwt.encode(

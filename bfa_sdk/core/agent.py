@@ -238,6 +238,9 @@ class BFAAgent(abc.ABC):
         Dynamically register this agent with BFA Gateway using cryptographic challenge-response,
         falling back to simple registration if unsupported.
         """
+        # Delay slightly to allow the local Uvicorn/Starlette port to bind and listen
+        await asyncio.sleep(1.0)
+        
         self.gateway_url = gateway_url
         init_url = f"{gateway_url.rstrip('/')}/register/init"
         verify_url = f"{gateway_url.rstrip('/')}/register/verify"
@@ -246,6 +249,17 @@ class BFAAgent(abc.ABC):
         try:
             # 1. Initialize challenge
             async with httpx.AsyncClient() as client:
+                # Try to download gateway public key if still missing
+                if not self.gateway_public_key:
+                    try:
+                        res_pub = await client.get(f"{gateway_url.rstrip('/')}/public_key", timeout=5)
+                        if res_pub.status_code == 200:
+                            pem_str = res_pub.json().get("public_key")
+                            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+                            self.gateway_public_key = load_pem_public_key(pem_str.encode("utf-8"))
+                    except Exception as e:
+                        print(f"BFAAgent Warning: Could not download gateway public key during registration: {e}")
+
                 res = await client.post(init_url, json={"node_id": self.agent_id, "channels": self.channels}, timeout=5)
                 if res.status_code in (404, 405, 501):
                     raise NotImplementedError("Gateway does not support cryptographic challenge-response")

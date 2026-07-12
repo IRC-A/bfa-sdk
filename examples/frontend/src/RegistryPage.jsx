@@ -57,27 +57,29 @@ export default function RegistryPage() {
 
                 {/* Main section: Form + Stats */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* Programmatic Registration Info (Corporate Style) */}
-                    <div className="lg:col-span-2 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col gap-4">
-                        <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                            <span>💻</span> Registro de Servicios Programático (cURL)
-                        </h2>
-                        <p className="text-gray-400 text-xs leading-relaxed">
-                            Para registrar dinámicamente un nuevo agente o servidor MCP en la red IRC-A, realiza una petición POST al Gateway. La indexación en el pool semántico de FAISS se ejecutará automáticamente en caliente.
-                        </p>
-
-                        <div className="flex flex-col gap-3 mt-2">
-                            <div>
-                                <span className="text-xs font-semibold text-blue-400 block mb-1">Registrar un Agente (A2A):</span>
-                                <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
-                                    {`curl -X POST "http://localhost:8000/register/agent?url=http://127.0.0.1:8004"`}
-                                </pre>
-                            </div>
-                            <div>
-                                <span className="text-xs font-semibold text-indigo-400 block mb-1">Registrar un Servidor MCP:</span>
-                                <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
-                                    {`curl -X POST "http://localhost:8000/register/mcp?url=http://127.0.0.1:8001"`}
-                                </pre>
+                    {/* Register Form */}
+                    <div className="lg:col-span-2 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col justify-between">
+                        <div className="flex flex-col gap-4">
+                            <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                                <span>⚡</span> Conectar Nuevo Agente / MCP en Caliente
+                            </h2>
+                            <p className="text-gray-400 text-xs">
+                                Por motivos de seguridad (IRC-A), el registro directo desde la interfaz web ha sido inhabilitado. Realiza el acoplamiento de servicios mediante peticiones programáticas cURL:
+                            </p>
+                            
+                            <div className="flex flex-col gap-3 mt-1">
+                                <div>
+                                    <span className="text-xs font-semibold text-blue-400 block mb-1">Registrar un Agente (A2A):</span>
+                                    <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
+                                        {`curl -X POST "http://localhost:8000/register/agent?url=http://127.0.0.1:8104&channels=%23content"`}
+                                    </pre>
+                                </div>
+                                <div>
+                                    <span className="text-xs font-semibold text-indigo-400 block mb-1">Registrar un Servidor MCP:</span>
+                                    <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
+                                        {`curl -X POST "http://localhost:8000/register/mcp?url=http://127.0.0.1:8102&channels=%23content"`}
+                                    </pre>
+                                </div>
                             </div>
                         </div>
                     </div>
