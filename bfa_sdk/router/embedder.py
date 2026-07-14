@@ -60,7 +60,7 @@ class LocalEmbedder(AbstractEmbedder):
         except ImportError:
             raise ImportError(
                 "sentence-transformers package not found. "
-                "Please run: pip install 'bfa-sdk[local]'"
+                "Please run: pip install 'bfa-irc-a-sdk[local]'"
             )
 
     def embed_query(self, text: str) -> List[float]:
