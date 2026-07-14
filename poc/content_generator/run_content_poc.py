@@ -44,8 +44,12 @@ try:
         sys.exit(1)
     print("[POC] Gateway is UP. Now spawning agents and MCP servers...")
 
-    # Start WriterAgent (Port 8101)
-    print("[POC] Launching WriterAgent on port 8101...")
+    # Start OrchestratorAgent (Port 8101)
+    print("[POC] Launching OrchestratorAgent on port 8101...")
+    orchestrator_proc = subprocess.Popen([sys.executable, "-u", "poc/content_generator/orchestrator_agent.py"])
+
+    # Start WriterAgent (Port 8106)
+    print("[POC] Launching WriterAgent on port 8106...")
     writer_proc = subprocess.Popen([sys.executable, "-u", "poc/content_generator/writer_agent.py"])
 
     # Start KeywordsMCP (Port 8102)
@@ -60,14 +64,36 @@ try:
     print("[POC] Launching ExtraMarketingAgent on port 8104 (isolated)...")
     extra_proc = subprocess.Popen([sys.executable, "-u", "poc/content_generator/extra_agent.py"])
 
+    # Start ResearchAgent (Port 8105)
+    print("[POC] Launching ResearchAgent on port 8105...")
+    research_proc = subprocess.Popen([sys.executable, "-u", "poc/content_generator/research_agent.py"])
+
     print("\n[POC] Waiting for agents and MCP servers to boot up...")
     
-    # Wait for WriterAgent
-    writer_ok = False
+    # Wait for OrchestratorAgent (8101)
+    orchestrator_ok = False
     for i in range(15):
         try:
             with httpx.Client() as client:
                 res = client.get("http://127.0.0.1:8101/.well-known/agent-card.json")
+                if res.status_code == 200:
+                    orchestrator_ok = True
+                    break
+        except Exception:
+            pass
+        time.sleep(1)
+        
+    if not orchestrator_ok:
+        print("[POC] Error: OrchestratorAgent failed to respond on port 8101.")
+        sys.exit(1)
+    print("[POC] OrchestratorAgent is UP.")
+
+    # Wait for WriterAgent (8106)
+    writer_ok = False
+    for i in range(15):
+        try:
+            with httpx.Client() as client:
+                res = client.get("http://127.0.0.1:8106/.well-known/agent-card.json")
                 if res.status_code == 200:
                     writer_ok = True
                     break
@@ -76,7 +102,7 @@ try:
         time.sleep(1)
         
     if not writer_ok:
-        print("[POC] Error: WriterAgent failed to respond on port 8101.")
+        print("[POC] Error: WriterAgent failed to respond on port 8106.")
         sys.exit(1)
     print("[POC] WriterAgent is UP.")
 
@@ -132,6 +158,23 @@ try:
         print("[POC] Warning: ExtraMarketingAgent failed to respond on port 8104.")
     else:
         print("[POC] ExtraMarketingAgent is UP (isolated, ready for manual registration).")
+
+    # Wait for ResearchAgent
+    research_ok = False
+    for i in range(15):
+        try:
+            with httpx.Client() as client:
+                res = client.get("http://127.0.0.1:8105/.well-known/agent-card.json")
+                if res.status_code == 200:
+                    research_ok = True
+                    break
+        except Exception:
+            pass
+        time.sleep(1)
+    if not research_ok:
+        print("[POC] Error: ResearchAgent failed to respond on port 8105.")
+        sys.exit(1)
+    print("[POC] ResearchAgent is UP.")
 
     # Give registration time to process
     print("[POC] Services are online. Giving 2 seconds for registrations to sync...")
@@ -253,12 +296,16 @@ finally:
     mcp_proc.terminate()
     reviewer_proc.terminate()
     extra_proc.terminate()
+    research_proc.terminate()
+    orchestrator_proc.terminate()
     gateway_proc.terminate()
     
     writer_proc.wait()
     mcp_proc.wait()
     reviewer_proc.wait()
     extra_proc.wait()
+    research_proc.wait()
+    orchestrator_proc.wait()
     gateway_proc.wait()
     
     print("\n[POC] All processes terminated cleanly. FAISS registry index updated on disconnect.")

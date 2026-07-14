@@ -634,17 +634,37 @@
                 let resultText = data.result || data.error || "Unknown response";
                 consoleOut.textContent = resultText;
 
-                // Parse out the final essay
-                const finalEssayMatch = resultText.match(/=== Final Refined Essay ===\n([\s\S]+)/);
+                // Parse out the final essay (carriage-return safe)
+                const finalEssayMatch = resultText.match(/=== Final Refined Essay ===\r?\n([\s\S]+)/);
                 const essayCard = document.getElementById("essay-output-card");
                 const essayBody = document.getElementById("essay-output-body");
                 
                 if (finalEssayMatch && finalEssayMatch[1].trim()) {
                     essayCard.classList.remove("hidden");
+                    // Ensure header is set back to essay format
+                    essayCard.firstElementChild.innerHTML = "📝 Final Generated Article Copy";
                     essayBody.textContent = finalEssayMatch[1].trim();
                 } else {
-                    essayCard.classList.add("hidden");
-                    essayBody.textContent = "";
+                    // Fallback: extract the clean result from the discovered node execution block
+                    const resultCleanMatch = resultText.match(/=== Result from Discovered Node \([^\)]+\) ===\r?\n([\s\S]+)/);
+                    if (resultCleanMatch && resultCleanMatch[1].trim()) {
+                        essayCard.classList.remove("hidden");
+                        
+                        // Dynamically update the header title based on output context
+                        const headerEl = essayCard.firstElementChild;
+                        if (resultText.toLowerCase().includes("slogan")) {
+                            headerEl.innerHTML = "📝 Final Generated Slogan Copy";
+                        } else if (resultText.toLowerCase().includes("research")) {
+                            headerEl.innerHTML = "🔍 Final Research Context";
+                        } else {
+                            headerEl.innerHTML = "📝 Final Generated Output Copy";
+                        }
+                        
+                        essayBody.textContent = resultCleanMatch[1].trim();
+                    } else {
+                        essayCard.classList.add("hidden");
+                        essayBody.textContent = "";
+                    }
                 }
 
                 // Update visual flow steps based on response details

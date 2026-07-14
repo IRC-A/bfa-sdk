@@ -118,12 +118,13 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
                 "output_tokens": comp_tokens,
                 "total_tokens": prompt_tokens + comp_tokens
             }
-            # Support older Langsmith SDK versions (like 0.10.x used locally)
+            # Set usage metadata using the official SDK set method
+            rt.set(usage_metadata=usage_dict)
+            
+            # Support older/custom serialization fallbacks
             if not isinstance(rt.extra, dict):
                 rt.extra = {}
             rt.extra["usage_metadata"] = usage_dict
-            
-            # Support newer Langsmith SDK versions
             try:
                 rt.usage_metadata = usage_dict
             except:
@@ -131,7 +132,14 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
     except Exception as e:
         pass
 
-    return text, prompt_tokens, comp_tokens
+    return {
+        "output": text,
+        "usage_metadata": {
+            "input_tokens": prompt_tokens,
+            "output_tokens": comp_tokens,
+            "total_tokens": prompt_tokens + comp_tokens
+        }
+    }
 
 class ExtraMarketingAgent(BFAAgent):
     def __init__(self):
@@ -150,7 +158,10 @@ class ExtraMarketingAgent(BFAAgent):
             f"Generate an engaging, punchy marketing slogan for: '{user_message}'. "
             "Write only the slogan text directly without quotes."
         )
-        text, p_tok, c_tok = await generate_llm_content(llm_prompt)
+        llm_res = await generate_llm_content(llm_prompt)
+        text = llm_res["output"]
+        p_tok = llm_res["usage_metadata"]["input_tokens"]
+        c_tok = llm_res["usage_metadata"]["output_tokens"]
         if text:
             slogan = text.strip()
         else:

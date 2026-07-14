@@ -1,31 +1,28 @@
 import os
+import json
 import uvicorn
 import httpx
 from dotenv import load_dotenv
 from bfa_sdk.core.agent import BFAAgent
 from a2a.server.agent_execution.context import RequestContext
 
-# Load environmental configurations
 load_dotenv()
 
 # Defensive Langsmith integration for real-time cloud tracing
 try:
     from langsmith import traceable
 except ImportError:
-    # Dummy fallback decorator if package is missing
     def traceable(*args, **kwargs):
         return lambda func: func
 
-# Configure environmental options for BFA Gateway routing
+# Configure environmental options for BFA routing
 os.environ["IRCA_CHANNELS"] = "#content"
 os.environ["BFA_GATEWAY_URL"] = "http://127.0.0.1:8000"
 
-@traceable(run_type="llm", name="Reviewer LLM Generation")
-async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
+@traceable(run_type="llm", name="Research LLM Generation")
+async def generate_llm_content(prompt: str) -> dict:
     """Helper to query the configured LLM provider and track token usage."""
     provider = os.getenv("LLM_PROVIDER", "").lower().strip()
-    
-    # Auto-detect default provider if not explicitly set
     if not provider:
         if os.getenv("OPENAI_API_KEY", "").strip().strip("'\""):
             provider = "openai"
@@ -38,7 +35,7 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
     prompt_tokens = len(prompt) // 4
     comp_tokens = 0
 
-    # 1. OpenAI Provider
+    # 1. OpenAI
     if provider == "openai":
         openai_key = os.getenv("OPENAI_API_KEY", "").strip().strip("'\"")
         model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip().strip("'\"")
@@ -62,12 +59,10 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
                         usage = data.get("usage", {})
                         prompt_tokens = usage.get("prompt_tokens", len(prompt) // 4)
                         comp_tokens = usage.get("completion_tokens", len(text) // 4)
-                    else:
-                        print(f"OpenAI API Error: {res.status_code} - {res.text}")
             except Exception as e:
-                print(f"OpenAI Call failed: {e}")
+                print(f"[RESEARCH] OpenAI failed: {e}")
 
-    # 2. Gemini Provider
+    # 2. Gemini
     elif provider == "gemini":
         gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")).strip().strip("'\"")
         if gemini_key:
@@ -86,12 +81,10 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
                         usage = data.get("usageMetadata", {})
                         prompt_tokens = usage.get("promptTokenCount", len(prompt) // 4)
                         comp_tokens = usage.get("candidatesTokenCount", len(text) // 4)
-                    else:
-                        print(f"Gemini API Error: {res.status_code} - {res.text}")
             except Exception as e:
-                print(f"Gemini call failed: {e}")
+                print(f"[RESEARCH] Gemini failed: {e}")
 
-    # 3. Ollama Provider (Local LLM)
+    # 3. Ollama
     elif provider == "ollama":
         ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip().strip("'\"")
         ollama_model = os.getenv("OLLAMA_MODEL", "llama3").strip().strip("'\"")
@@ -109,10 +102,8 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
                     text = data["message"]["content"]
                     prompt_tokens = data.get("prompt_eval_count", len(prompt) // 4)
                     comp_tokens = data.get("eval_count", len(text) // 4)
-                else:
-                    print(f"Ollama API Error: {res.status_code} - {res.text}")
         except Exception as e:
-            print(f"Ollama call failed: {e}")
+            print(f"[RESEARCH] Ollama failed: {e}")
 
     # Log custom LLM metrics to Langsmith if package is active and environment variables are set
     try:
@@ -128,10 +119,7 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
                 "output_tokens": comp_tokens,
                 "total_tokens": prompt_tokens + comp_tokens
             }
-            # Set usage metadata using the official SDK set method
             rt.set(usage_metadata=usage_dict)
-            
-            # Support older/custom serialization fallbacks
             if not isinstance(rt.extra, dict):
                 rt.extra = {}
             rt.extra["usage_metadata"] = usage_dict
@@ -151,83 +139,87 @@ async def generate_llm_content(prompt: str) -> tuple[str, int, int]:
         }
     }
 
-class ReviewerAgent(BFAAgent):
+class ResearchAgent(BFAAgent):
     def __init__(self):
         super().__init__(
-            agent_id="reviewer-agent",
-            name="Reviewer Agent",
-            description="Reviews essay drafts and provides structured critiques.",
-            tags=["reviewer", "reflection", "critique"],
-            examples=["review draft", "critique essay"],
-            url="http://127.0.0.1:8103"
+            agent_id="research-agent",
+            name="Research Agent",
+            description="Performs web search research on any topic using Tavily API.",
+            tags=["research", "search", "tavily", "websearch"],
+            examples=["research topic", "search web for facts", "gather context on topic"],
+            url="http://127.0.0.1:8105"
         )
 
     async def run(self, user_message: str, context: RequestContext) -> str:
-        """
-        Processes writing drafts. Performs reflection, generates critiques.
-        If loop simulation is triggered, attempts to call WriterAgent recursively.
-        """
-        # If loop simulation is requested in the message
-        if "loop" in user_message.lower():
-            # Attempt to call back WriterAgent at port 8101 creating a circular call chain
-            async with httpx.AsyncClient() as client:
-                rpc_payload = {
-                    "jsonrpc": "2.0",
-                    "method": "SendMessage",
-                    "params": {
-                        "message": {
-                            "role": 1,
-                            "message_id": "msg-loop-001",
-                            "context_id": "ctx-loop-001",
-                            "parts": [{"text": "Generate essay recursively"}]
-                        }
-                    },
-                    "id": 200
-                }
-                
-                # Propagate visited nodes list (Writer -> Reviewer -> Writer loop)
-                headers = {
-                    "A2A-Version": "1.0",
-                    "X-Trace-Id": "tx-loop-check",
-                    "X-Visited-Nodes": "writer-agent,reviewer-agent"
-                }
-                
-                try:
-                    res_loop = await client.post(
-                        "http://127.0.0.1:8101/",
-                        json=rpc_payload,
-                        headers=headers,
-                        timeout=5
-                    )
-                    # Should be blocked and return 409 Conflict
-                    return f"Status: {res_loop.status_code}, Body: {res_loop.text}"
-                except Exception as e:
-                    return f"Loop call failed: {e}"
-
-        # Standard reflection flow: check if real LLM is available
-        prompt = (
-            "Review this draft essay. Write a single, brief sentence suggesting one specific "
-            f"constructive improvement for the text:\n\n{user_message}"
-        )
-        llm_res = await generate_llm_content(prompt)
-        real_critique = llm_res["output"]
-        prompt_tokens = llm_res["usage_metadata"]["input_tokens"]
-        comp_tokens = llm_res["usage_metadata"]["output_tokens"]
+        tavily_key = os.getenv("TAVILY_API_KEY", "").strip().strip("'\"")
         
-        if real_critique:
-            critique = f"Critique (via LLM): {real_critique.strip()}"
+        # 1. Ask the LLM to generate exactly 2 web search queries for the topic
+        query_prompt = (
+            f"Generate exactly 2 precise search queries to search the web for information on: '{user_message}'. "
+            "Write the queries, one per line, and absolutely nothing else. No numbers, no headers."
+        )
+        
+        llm_res = await generate_llm_content(query_prompt)
+        raw_queries = llm_res["output"]
+        p_tok = llm_res["usage_metadata"]["input_tokens"]
+        c_tok = llm_res["usage_metadata"]["output_tokens"]
+        
+        queries = []
+        if raw_queries:
+            for line in raw_queries.split("\n"):
+                line = line.strip().lstrip("1234567890.-* ")
+                if line:
+                    queries.append(line)
+        
+        # Fallback query if LLM returned nothing
+        if not queries:
+            queries = [user_message]
+        
+        # Keep only up to 2 queries for efficiency
+        queries = queries[:2]
+        print(f"[RESEARCH] Generated queries: {queries}")
+
+        search_contents = []
+        
+        # 2. Call Tavily Search API for each query
+        if tavily_key:
+            async with httpx.AsyncClient() as client:
+                for q in queries:
+                    try:
+                        tavily_res = await client.post(
+                            "https://api.tavily.com/search",
+                            json={
+                                "api_key": tavily_key,
+                                "query": q,
+                                "max_results": 2
+                            },
+                            timeout=8
+                        )
+                        if tavily_res.status_code == 200:
+                            data = tavily_res.json()
+                            for result in data.get("results", []):
+                                if "content" in result:
+                                    search_contents.append(f"- {result['content']}")
+                        else:
+                            print(f"[RESEARCH] Tavily API Error: {tavily_res.status_code} - {tavily_res.text}")
+                    except Exception as e:
+                        print(f"[RESEARCH] Tavily search for query '{q}' failed: {e}")
         else:
-            critique = (
-                "Critique: The draft effectively addresses the topic but lacks specific "
-                "marketing examples. Recommend adding a call-to-action."
-            )
-            prompt_tokens = len(user_message) // 4
-            comp_tokens = len(critique) // 4
+            print("[RESEARCH] No TAVILY_API_KEY configured. Returning high-quality mock results.")
+            for q in queries:
+                mock_text = f"Mock context for query '{q}': The integration of advanced systems enables streamlining of industrial tasks, resulting in enhanced productivity, lower costs, and optimized operational workflows."
+                search_contents.append(f"- {mock_text}")
+        
+        # 3. Combine results and return them
+        research_context = "\n".join(search_contents)
+        if not research_context:
+            research_context = f"No search results found for topic: '{user_message}'."
 
-        return f"{critique}\n[METRICS: prompt_tokens={prompt_tokens}, completion_tokens={comp_tokens}]"
+        return f"{research_context}\n[METRICS: prompt_tokens={p_tok}, completion_tokens={c_tok}]"
 
-agent_instance = ReviewerAgent()
+agent_instance = ResearchAgent()
 app = agent_instance.app
 
 if __name__ == "__main__":
-    uvicorn.run("reviewer_agent:app", host="127.0.0.1", port=8103, log_level="warning")
+    print("[RESEARCH] Starting ResearchAgent on port 8105...")
+    uvicorn.run("research_agent:app", host="127.0.0.1", port=8105, log_level="warning")
