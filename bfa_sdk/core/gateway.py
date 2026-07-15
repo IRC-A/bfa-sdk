@@ -527,3 +527,40 @@ try:
 except ImportError:
     # Mangum optional
     pass
+
+
+def main():
+    """
+    CLI execution entry point to start the IRC-A Gateway using uvicorn.
+    """
+    import uvicorn
+    # Load dotenv if present
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    host = os.getenv("BFA_GATEWAY_HOST", "127.0.0.1")
+    port = int(os.getenv("BFA_GATEWAY_PORT", "8000"))
+    
+    # Check if OpenAI API Key is loaded
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip().strip("'\"")
+    if openai_key:
+        os.environ["BFA_USE_OPENAI_EMBEDDINGS"] = "true"
+        os.environ["BFA_USE_MOCK_EMBEDDINGS"] = "false"
+        print("IRC-A Gateway: Found OpenAI API key, activating OpenAI Embeddings!")
+    else:
+        # Check if local dependencies are missing
+        try:
+            import sentence_transformers
+            os.environ["BFA_USE_MOCK_EMBEDDINGS"] = "false"
+            os.environ["BFA_USE_OPENAI_EMBEDDINGS"] = "false"
+        except ImportError:
+            os.environ["BFA_USE_MOCK_EMBEDDINGS"] = "true"
+            os.environ["BFA_USE_OPENAI_EMBEDDINGS"] = "false"
+            print("IRC-A Gateway: Falling back to DummyEmbedder (offline mock).")
+
+    gateway_app = create_gateway_app()
+    uvicorn.run(gateway_app, host=host, port=port, log_level="warning")
+

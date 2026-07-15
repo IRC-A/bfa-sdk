@@ -38,6 +38,9 @@ local = [
     "sentence-transformers"
 ]
 
+[project.scripts]
+irc-a-gateway = "bfa_sdk.core.gateway:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bfa_sdk*"]

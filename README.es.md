@@ -62,14 +62,18 @@ El BFA Gateway utiliza embeddings semánticos para indexar la metadata de agente
 
 ## Instalación
 
-Podés instalar la SDK de BFA directamente desde GitHub usando `pip`:
+Podés instalar la SDK de BFA/IRC-A directamente desde GitHub usando `pip`:
 
 ```bash
-# Instalar la versión en desarrollo desde la rama principal (main)
+# Instalar la librería desde la rama principal (main)
 pip install git+https://github.com/SandroG1977/bfa-sdk.git
+```
 
-# O instalar la versión específica con el protocolo de seguridad IRC-A
-pip install git+https://github.com/SandroG1977/bfa-sdk.git@feature/docstrings-init
+Una vez instalada, podés iniciar el Gateway directamente desde la línea de comandos usando el ejecutable CLI integrado:
+
+```bash
+# Iniciar el servidor del IRC-A Gateway
+irc-a-gateway
 ```
 
 ---
