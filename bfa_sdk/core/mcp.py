@@ -187,6 +187,7 @@ class BFAMCP:
         Enforces Gateway signature check, scope limit, and parameter constraints.
         """
         if not self.gateway_public_key:
+            print("BFAMCP verify_incoming_det check failed: gateway_public_key is None")
             return False
         try:
             decoded_det = jwt.decode(
@@ -197,20 +198,27 @@ class BFAMCP:
             )
             
             # Audience validation (accepts server node_id or expected_action)
-            if decoded_det.get("aud") not in (self.node_id, expected_action):
+            aud = decoded_det.get("aud")
+            if aud not in (self.node_id, expected_action):
+                print(f"BFAMCP verify_incoming_det check failed: aud '{aud}' not in {(self.node_id, expected_action)}")
                 return False
                 
             # Scope validation
-            if decoded_det.get("permitted_action") != expected_action:
+            permitted = decoded_det.get("permitted_action")
+            if permitted != expected_action:
+                print(f"BFAMCP verify_incoming_det check failed: permitted_action '{permitted}' != expected_action '{expected_action}'")
                 return False
                 
             # Parameter lockdown verification
             for key, value in decoded_det.get("restricted_params", {}).items():
                 if runtime_args.get(key) != value:
+                    print(f"BFAMCP verify_incoming_det check failed: parameter lockdown check for '{key}' failed. Expected '{value}', got '{runtime_args.get(key)}'")
                     return False
                     
+            print(f"BFAMCP verify_incoming_det check PASSED for action '{expected_action}'!")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"BFAMCP verify_incoming_det exception: {e}")
             return False
 
     async def _list_tools_handler(self) -> JSONResponse:

@@ -46,7 +46,7 @@ def load_persisted_endpoints() -> Dict[str, List[str]]:
                 "mcp_endpoints": data.get("mcp_endpoints", [])
             }
     except Exception as e:
-        print(f"BFA Gateway: Error loading persisted registry DB: {e}")
+        print(f"IRC-A Gateway: Error loading persisted registry DB: {e}")
         return {"agent_endpoints": [], "mcp_endpoints": []}
 
 
@@ -62,7 +62,7 @@ def persist_endpoint(type_: str, url: str):
             with open(REGISTRY_DB_PATH, "w") as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            print(f"BFA Gateway: Error saving to persisted registry DB: {e}")
+            print(f"IRC-A Gateway: Error saving to persisted registry DB: {e}")
 
 
 async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
@@ -129,17 +129,17 @@ async def lifespan(app: FastAPI):
     
     # Initialize embedding driver
     if CONFIG.use_mock_embeddings:
-        print("BFA Gateway: Using DummyEmbedder for fast offline testing.")
+        print("IRC-A Gateway: Using DummyEmbedder for fast offline testing.")
         EMBEDDER = DummyEmbedder()
     elif CONFIG.use_openai_embeddings:
-        print("BFA Gateway: Using cloud OpenAIEmbedder (perfect for serverless/Lambda).")
+        print("IRC-A Gateway: Using cloud OpenAIEmbedder (perfect for serverless/Lambda).")
         EMBEDDER = OpenAIEmbedder(api_key=CONFIG.openai_api_key)
     else:
         try:
-            print(f"BFA Gateway: Initializing local model '{CONFIG.embedding_model}'...")
+            print(f"IRC-A Gateway: Initializing local model '{CONFIG.embedding_model}'...")
             EMBEDDER = LocalEmbedder(CONFIG.embedding_model)
         except Exception as e:
-            print(f"BFA Gateway Warning: Could not load local model: {e}. Falling back to DummyEmbedder.")
+            print(f"IRC-A Gateway Warning: Could not load local model: {e}. Falling back to DummyEmbedder.")
             EMBEDDER = DummyEmbedder()
             
     ROUTER = BFASemanticRouter(EMBEDDER)
@@ -152,7 +152,7 @@ async def lifespan(app: FastAPI):
     all_mcps = list(set(CONFIG.mcp_endpoints + persisted["mcp_endpoints"]))
     
     # Perform agent/tool discovery
-    print("BFA Gateway: Starting network discovery...")
+    print("IRC-A Gateway: Starting network discovery...")
     agents = await discover_agents(all_agents)
     tools = await discover_tools(all_mcps)
     
@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
     ROUTER.update_registry(tools)
     ROUTER.build_index()
     
-    print(f"BFA Gateway: Discovery completed. Indexed {len(agents)} agents and {len(tools)} tools.")
+    print(f"IRC-A Gateway: Discovery completed. Indexed {len(agents)} agents and {len(tools)} tools.")
     yield
 
 

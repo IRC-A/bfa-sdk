@@ -74,6 +74,59 @@ pip install git+https://github.com/SandroG1977/bfa-sdk.git@feature/docstrings-in
 
 ---
 
+## Despliegue con Docker (Contenedor del Gateway BFA)
+
+Podés ejecutar el Gateway BFA (incluyendo su enrutador semántico de búsqueda vectorial y el panel de control interactivo en modo oscuro) como un microservicio contenedorizado usando Docker o Docker Compose.
+
+### Opción A: Usando Docker Compose (Recomendado)
+Cloná el repositorio y levantá el contenedor localmente:
+```bash
+docker-compose up --build -d
+```
+
+### Opción B: Descargar desde Docker Hub
+Para ejecutar la imagen precompilada del Gateway directamente:
+```bash
+docker run -d \
+  -p 8000:8000 \
+  --name bfa-gateway \
+  -e OPENAI_API_KEY="tu-openai-api-key" \
+  sandrog77/irc-a-gateway:latest
+```
+Accedé al panel visual interactivo desde tu navegador en `http://127.0.0.1:8000/`.
+
+### Conexión de Agentes y Servidores MCP Remotos
+
+Una vez que tu contenedor de Gateway está corriendo en un servidor (por ejemplo, en `http://IP_DE_TU_SERVIDOR:8000`), podés conectar dinámicamente agentes y herramientas desde cualquier ubicación.
+
+#### 1. Auto-registro Automático (Recomendado)
+Configurá tu agente al instanciar `BFAAgent` indicando la URL del Gateway del servidor:
+```python
+agent = MiAgente(
+    agent_id="mi-agent-id",
+    name="Mi Agente",
+    url="http://IP_LOCAL_DE_TU_AGENTE:8080",
+    gateway_url="http://IP_DE_TU_SERVIDOR:8000"
+)
+```
+Al arrancar, el agente realizará automáticamente el handshake criptográfico y se registrará en el índice FAISS del Gateway remoto.
+
+#### 2. Registro Manual (cURL)
+Podés registrar manualmente cualquier agente o servidor MCP enviando una solicitud HTTP:
+
+* **Registrar un Agente:**
+  ```bash
+  curl -X POST "http://IP_DE_TU_SERVIDOR:8000/register/agent?url=http://IP_DE_TU_AGENTE:PUERTO&channels=#public"
+  ```
+* **Registrar un Servidor MCP:**
+  ```bash
+  curl -X POST "http://IP_DE_TU_SERVIDOR:8000/register/mcp?url=http://IP_DE_TU_MCP:PUERTO&channels=#public"
+  ```
+
+Una vez registrado, las nuevas capacidades estarán disponibles de forma inmediata para búsquedas y enrutamiento semántico a través del gateway.
+
+---
+
 ## Ejecución de la Demo
 
 ### 2. Ejecutar la Demo MDBank

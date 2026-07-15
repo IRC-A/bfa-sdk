@@ -74,6 +74,59 @@ pip install git+https://github.com/SandroG1977/bfa-sdk.git@feature/docstrings-in
 
 ---
 
+## Docker Deployment (BFA Gateway Container)
+
+You can run the BFA Gateway (including its semantic search router and dark-mode management dashboard) as a containerized microservice using Docker or Docker Compose.
+
+### Option A: Using Docker Compose (Recommended)
+Clone the repository and run the container locally:
+```bash
+docker-compose up --build -d
+```
+
+### Option B: Pulling from Docker Hub
+To run the pre-built gateway image directly:
+```bash
+docker run -d \
+  -p 8000:8000 \
+  --name bfa-gateway \
+  -e OPENAI_API_KEY="your-openai-api-key" \
+  sandrog77/irc-a-gateway:latest
+```
+Access the visual dashboard in your browser at `http://127.0.0.1:8000/`.
+
+### Connecting Remote Agents and MCP Servers
+
+Once your Gateway container is running on a server (e.g., at `http://YOUR_SERVER_IP:8000`), you can dynamically connect agents and tools to it from any location.
+
+#### 1. Automatic Self-Registration (Recommended)
+Configure your agent when instantiating `BFAAgent` to point to the server's Gateway URL:
+```python
+agent = MyAgent(
+    agent_id="my-agent-id",
+    name="My Agent",
+    url="http://YOUR_AGENT_LOCAL_IP:8080",
+    gateway_url="http://YOUR_SERVER_IP:8000"
+)
+```
+Upon startup, the agent will automatically perform the cryptographic handshake and register itself in the Gateway's FAISS index.
+
+#### 2. Manual Registration (cURL)
+You can manually register any agent or MCP server endpoint from your terminal:
+
+* **Register an Agent:**
+  ```bash
+  curl -X POST "http://YOUR_SERVER_IP:8000/register/agent?url=http://YOUR_AGENT_IP:PORT&channels=#public"
+  ```
+* **Register an MCP Server:**
+  ```bash
+  curl -X POST "http://YOUR_SERVER_IP:8000/register/mcp?url=http://YOUR_MCP_IP:PORT&channels=#public"
+  ```
+
+Once registered, the new capabilities will instantly become available for semantic routing queries through the gateway!
+
+---
+
 ## Running the Demo
 
 ### 2. Run the MDBank Demo

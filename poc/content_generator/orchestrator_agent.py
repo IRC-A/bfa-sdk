@@ -212,9 +212,15 @@ class OrchestratorAgent(BFAAgent):
 
                 target_capability = plan_data.get("capability")
                 target_payload = plan_data.get("payload")
-                if not target_capability or not target_payload:
+                if not target_capability or target_payload is None:
                     logs.append("   ⚠️ [ERROR] Planner returned empty capability or payload. Aborting.")
                     break
+                
+                # Defensively convert dict/list payloads to string for protobuf compliance
+                if isinstance(target_payload, (dict, list)):
+                    target_payload = json.dumps(target_payload)
+                else:
+                    target_payload = str(target_payload)
 
                 logs.append(f"🔍 [STEP] Querying BFA Gateway to discover handler for '{target_capability}'...")
                 try:

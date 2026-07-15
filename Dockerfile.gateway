@@ -1,0 +1,31 @@
+# Use a slim Python 3.12 image
+FROM python:3.12-slim
+
+# Set work directory
+WORKDIR /app
+
+# Install system dependencies (including build tools for potential package needs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy package config and description files
+COPY pyproject.toml README.md ./
+
+# Copy library and POC files
+COPY bfa_sdk/ ./bfa_sdk/
+COPY poc/ ./poc/
+
+# Install the library in editable/install mode
+RUN pip install --no-cache-dir -e .
+
+# Expose Gateway port
+EXPOSE 8000
+
+# Set environment variables for stdout flushing and default binding host
+ENV PYTHONUNBUFFERED=1
+ENV BFA_GATEWAY_HOST=0.0.0.0
+ENV BFA_GATEWAY_PORT=8000
+
+# Start Gateway
+CMD ["python", "poc/gateway.py"]

@@ -20,11 +20,11 @@ if os.path.exists("bfa_registry_db.json"):
         print(f"[POC] Warning: Could not clear previous registry database: {e}")
 
 # Start Gateway (Port 8000)
-print("\n[POC] Launching BFA Gateway on port 8000...")
+print("\n[POC] Launching IRC-A Gateway on port 8000...")
 gateway_proc = subprocess.Popen([sys.executable, "-u", "poc/gateway.py"])
 
 try:
-    print("\n[POC] Waiting for BFA Gateway to boot up...")
+    print("\n[POC] Waiting for IRC-A Gateway to boot up...")
     
     # Wait for Gateway
     gateway_ok = False
@@ -177,8 +177,8 @@ try:
     print("[POC] ResearchAgent is UP.")
 
     # Give registration time to process
-    print("[POC] Services are online. Giving 2 seconds for registrations to sync...")
-    time.sleep(2)
+    print("[POC] Services are online. Giving 5 seconds for registrations to sync...")
+    time.sleep(5)
     
     # -------------------------------------------------------------
     # FLOW 1: Verification of registration handshakes
@@ -216,7 +216,7 @@ try:
             "id": 1
         }
         headers = {"A2A-Version": "1.0"}
-        res_writer = client.post("http://127.0.0.1:8101/", json=rpc_payload, headers=headers, timeout=30)
+        res_writer = client.post("http://127.0.0.1:8101/", json=rpc_payload, headers=headers, timeout=60)
         print(f"WriterAgent Response Payload:\n{res_writer.json()['result']['message']['parts'][0]['text']}")
 
     # -------------------------------------------------------------
@@ -242,7 +242,7 @@ try:
             "id": 2
         }
         headers = {"A2A-Version": "1.0"}
-        res_writer_hack = client.post("http://127.0.0.1:8101/", json=rpc_payload_hack, headers=headers, timeout=30)
+        res_writer_hack = client.post("http://127.0.0.1:8101/", json=rpc_payload_hack, headers=headers, timeout=60)
         print(f"WriterAgent Hack Response:\n{res_writer_hack.json()['result']['message']['parts'][0]['text']}")
 
     # -------------------------------------------------------------
@@ -268,7 +268,7 @@ try:
             "id": 3
         }
         headers = {"A2A-Version": "1.0"}
-        res_reviewer_loop = client.post("http://127.0.0.1:8103/", json=rpc_payload_loop, headers=headers, timeout=30)
+        res_reviewer_loop = client.post("http://127.0.0.1:8103/", json=rpc_payload_loop, headers=headers, timeout=60)
         print(f"ReviewerAgent Loop Call Response (should show recursive call blocked with 409):\n{res_reviewer_loop.json()['result']['message']['parts'][0]['text']}")
 
     # -------------------------------------------------------------

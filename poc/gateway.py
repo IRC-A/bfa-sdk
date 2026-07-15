@@ -8,11 +8,11 @@ openai_key = os.getenv("OPENAI_API_KEY", "").strip().strip("'\"")
 if openai_key:
     os.environ["BFA_USE_OPENAI_EMBEDDINGS"] = "true"
     os.environ["BFA_USE_MOCK_EMBEDDINGS"] = "false"
-    print("BFA Gateway: Found OpenAI API key, activating OpenAI Embeddings!")
+    print("IRC-A Gateway: Found OpenAI API key, activating OpenAI Embeddings!")
 else:
     os.environ["BFA_USE_MOCK_EMBEDDINGS"] = "true"
     os.environ["BFA_USE_OPENAI_EMBEDDINGS"] = "false"
-    print("BFA Gateway: No OpenAI API key found, falling back to DummyEmbedder.")
+    print("IRC-A Gateway: No OpenAI API key found, falling back to DummyEmbedder.")
 
 os.environ["BFA_GATEWAY_URL"] = "http://127.0.0.1:8000"
 
@@ -59,7 +59,7 @@ async def gateway_root(request: Request):
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>IRC-A Central Hub (BFA Gateway)</title>
+            <title>IRC-A Gateway</title>
             <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
             <style>
                 :root {
@@ -332,7 +332,7 @@ async def gateway_root(request: Request):
         <body>
             <header>
                 <div class="logo-area">
-                    <h1>🔌 IRC-A Central Hub (BFA Gateway)</h1>
+                    <h1>🔌 IRC-A Gateway</h1>
                     <p>Real-time Semantic Router & Directory for Financial Agents and MCP Microservices.</p>
                 </div>
                 <button class="btn-refresh" onclick="updateRegistry()">
@@ -558,4 +558,6 @@ async def gateway_root(request: Request):
         }
 
 if __name__ == "__main__":
-    uvicorn.run("gateway:app", host="127.0.0.1", port=8000, log_level="warning")
+    host = os.getenv("BFA_GATEWAY_HOST", "127.0.0.1")
+    port = int(os.getenv("BFA_GATEWAY_PORT", "8000"))
+    uvicorn.run("gateway:app", host=host, port=port, log_level="warning")

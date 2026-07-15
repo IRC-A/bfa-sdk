@@ -1,0 +1,15 @@
+services:
+  irc-a-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: irc-a-gateway
+    image: sandrog77/irc-a-gateway:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # Propagates the host's OpenAI key if available, otherwise falls back to local DummyEmbedder
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      # Mounts registry database to persist registered agents and tools across restarts
+      - ./bfa_registry_db.json:/app/bfa_registry_db.json
