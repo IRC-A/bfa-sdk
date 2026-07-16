@@ -5,6 +5,7 @@
 **Version:** 1.0.0  
 **Date:** July 2026  
 **Category:** Software Architecture / Artificial Intelligence Infrastructure / Secure Software Engineering  
+**Copyright (c) 2026 Sandro G. All rights reserved. Licensed under AGPLv3 / Commercial Dual License.**
 
 ---
 

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Sandro G. All rights reserved.
+# Licensed under AGPLv3 / Commercial Dual License.
 # Backend for Agents SDK (BFA)
 # Version 0.1.0
 """

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Sandro G. All rights reserved.
+# Licensed under AGPLv3 / Commercial Dual License.
 import numpy as np
 from typing import List, Dict, Any, Optional
 from bfa_sdk.router.embedder import AbstractEmbedder

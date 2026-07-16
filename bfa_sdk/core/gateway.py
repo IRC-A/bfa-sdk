@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Sandro G. All rights reserved.
+# Licensed under AGPLv3 / Commercial Dual License.
 from fastapi import FastAPI, Query, HTTPException
 from contextlib import asynccontextmanager
 import httpx

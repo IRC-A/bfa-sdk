@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Sandro G. All rights reserved.
+# Licensed under AGPLv3 / Commercial Dual License.
 import os
 import yaml
 from typing import List, Dict, Any
