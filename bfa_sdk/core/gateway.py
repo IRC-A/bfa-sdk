@@ -41,6 +41,13 @@ def add_system_log(event_type: str, source: str, message: str, details: Any = No
     if len(SYSTEM_LOGS) > 200:
         SYSTEM_LOGS.pop(0)
 
+# Configurable parameter extractors to map natural language query patterns to DET parameters.
+# In a production environment, this can be customized in BFAConfig or loaded dynamically.
+DYNAMIC_PARAMETER_EXTRACTORS: Dict[str, str] = {
+    "customer_id": r"customer\s+(?:id-)?(\w+)",
+    "campaign_id": r"campaign\s+(\S+)"
+}
+
 REGISTRY_DB_PATH = os.getenv("BFA_REGISTRY_DB_PATH", "bfa_registry_db.json")
 
 # Ephemeral keys generated on load (unless loaded from env/files)
@@ -476,16 +483,17 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         target_node_id = best["skill"]
         target_type = best["type"]
         
-        # Simple customer/campaign ID extraction for parameter lockdown demo
+        # Extract restricted parameters dynamically using the configured extractors
         restricted_params = {}
-        import re
-        customer_match = re.search(r"customer\s+(?:id-)?(\w+)", query, re.IGNORECASE)
-        if customer_match:
-            restricted_params["customer_id"] = customer_match.group(1)
+        if payload and "restricted_params" in payload:
+            restricted_params.update(payload.get("restricted_params", {}))
             
-        campaign_match = re.search(r"campaign\s+(\S+)", query, re.IGNORECASE)
-        if campaign_match:
-            restricted_params["campaign_id"] = campaign_match.group(1)
+        import re
+        for param_name, pattern in DYNAMIC_PARAMETER_EXTRACTORS.items():
+            if param_name not in restricted_params:
+                match = re.search(pattern, query, re.IGNORECASE)
+                if match:
+                    restricted_params[param_name] = match.group(1)
             
         import uuid
         det_expiry = int(time.time()) + 60

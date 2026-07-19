@@ -108,18 +108,24 @@ class BFADETValidationMiddleware(BaseHTTPMiddleware):
                 params = rpc_payload.get("params", {})
                 runtime_args = {}
                 if isinstance(params, dict):
+                    # 1. Pull direct arguments from JSON-RPC flat structure
+                    for k, v in params.items():
+                        if isinstance(v, (str, int, float, bool)):
+                            runtime_args[k] = v
+                    
+                    # 2. Support extraction from standard A2A SendMessage text parts
                     msg = params.get("message", {})
                     if isinstance(msg, dict):
                         parts = msg.get("parts", [])
                         if parts and isinstance(parts[0], dict):
                             query_text = parts[0].get("text", "")
                             import re
-                            customer_match = re.search(r"customer\s+(?:id-)?(\w+)", query_text, re.IGNORECASE)
-                            if customer_match:
-                                runtime_args["customer_id"] = customer_match.group(1)
-                            campaign_match = re.search(r"campaign\s+(\S+)", query_text, re.IGNORECASE)
-                            if campaign_match:
-                                runtime_args["campaign_id"] = campaign_match.group(1)
+                            # Apply dynamically configured regex extractors on the agent instance
+                            extractors = getattr(self.agent_instance, "parameter_extractors", {})
+                            for param_name, pattern in extractors.items():
+                                match = re.search(pattern, query_text, re.IGNORECASE)
+                                if match:
+                                    runtime_args[param_name] = match.group(1)
             except Exception:
                 method_name = "SendMessage"
                 runtime_args = {}
@@ -201,7 +207,8 @@ class BFAAgent(abc.ABC):
         version: str = "1.0.0",
         private_key: Any = None,
         gateway_public_key: Any = None,
-        gateway_url: str = None
+        gateway_url: str = None,
+        parameter_extractors: Optional[Dict[str, str]] = None
     ):
         self.agent_id = agent_id
         self.name = name
@@ -212,6 +219,12 @@ class BFAAgent(abc.ABC):
         self.version = version
         self.gateway_url = gateway_url or os.getenv("BFA_GATEWAY_URL")
         self.replay_cache = ReplayPreventionCache()
+        
+        # Configure parameter extractors (can be empty for purely structured tools, or populated for NLP agents)
+        self.parameter_extractors = parameter_extractors if parameter_extractors is not None else {
+            "customer_id": r"customer\s+(?:id-)?(\w+)",
+            "campaign_id": r"campaign\s+(\S+)"
+        }
 
         # Load/Generate keys
         if private_key is None:
