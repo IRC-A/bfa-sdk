@@ -37,9 +37,10 @@ graph TD
 
 1. **Enrutamiento Semántico con FAISS:** En lugar de coincidencia exacta de palabras clave (como BM25), el BFA Gateway indexa las descripciones, tags y ejemplos de agentes y herramientas en un índice vectorial local de FAISS. Esto resuelve consultas incluso usando sinónimos (por ejemplo, asociar *"plástico"* con *"tarjeta de crédito"*).
 2. **Abstracción `BFAAgent`:** Simplifica la creación de agentes A2A usando el `a2a-sdk` y Starlette. Obliga a declarar metadatos indispensables (`tags`, `examples`, `description`) requeridos para la indexación semántica.
-3. **Abstracción `BFAMCP`:** Envuelve y extiende servidores de `FastMCP`. Expone automáticamente un endpoint estandarizado `/tools` con schemas de entrada, descripciones y tags/ejemplos customizados.
-4. **Seguridad IRC-A Segura por Diseño (Roadmap):** Emplea handshakes de registro mediante challenge-response asimétrico, enmascaramiento de canales lógicos (vía variables `.env` de nivel contenedor `IRCA_CHANNELS`) para segregar espacios de búsqueda vectorial, y tokens DET (Delegated Execution Tokens) efímeros para habilitar invocación directa P2P descentralizada sin cuellos de botella en el gateway.
-5. **Listo para Serverless (AWS Lambda):** Incluye un adaptador de **Mangum** integrado en el Gateway. Combinado con el driver de nube `OpenAIEmbedder`, el BFA Gateway corre en Lambda bajo demanda con cold-start cero.
+3. **Abstracción `BFAInteractiveAgent` (NUEVO):** Un nodo padre especializado para Agentes Frontend o Coordinadores. Mantiene automáticamente un Stack de Memoria de Ejecución por sesión y permite delegar sub-tareas a otros agentes de la red mediante `delegate_task()` usando claves semánticas limpias, evitando saturar la red con historiales extensos.
+4. **Abstracción `BFAMCP`:** Envuelve y extiende servidores de `FastMCP`. Expone automáticamente un endpoint estandarizado `/tools` con schemas de entrada, descripciones y tags/ejemplos customizados.
+5. **Seguridad IRC-A Segura por Diseño (Roadmap):** Emplea handshakes de registro mediante challenge-response asimétrico, enmascaramiento de canales lógicos (vía variables `.env` de nivel contenedor `IRCA_CHANNELS`) para segregar espacios de búsqueda vectorial, y tokens DET (Delegated Execution Tokens) efímeros para habilitar invocación directa P2P descentralizada sin cuellos de botella en el gateway.
+6. **Listo para Serverless (AWS Lambda):** Incluye un adaptador de **Mangum** integrado en el Gateway. Combinado con el driver de nube `OpenAIEmbedder`, el BFA Gateway corre en Lambda bajo demanda con cold-start cero.
 
 ---
 

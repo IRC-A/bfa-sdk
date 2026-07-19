@@ -11,60 +11,166 @@ import secrets
 import jwt
 from typing import Dict, Any, List, Optional
 from a2a.client import A2ACardResolver
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 
 from bfa_sdk.config import BFAConfig
 from bfa_sdk.router.embedder import LocalEmbedder, DummyEmbedder, OpenAIEmbedder
 from bfa_sdk.router.search import BFASemanticRouter
+from bfa_sdk.core.paseto import sign_paseto_v4_public, verify_paseto_v4_public
 
 # Global application dependencies
 CONFIG = BFAConfig()
 EMBEDDER = None
 ROUTER = None
 
+# Global system trace logs
+SYSTEM_LOGS: List[Dict[str, Any]] = []
+
+def add_system_log(event_type: str, source: str, message: str, details: Any = None):
+    import time
+    log_entry = {
+        "timestamp": time.strftime("%H:%M:%S"),
+        "event_type": event_type, # "REGISTRATION", "DISCOVERY", "EXECUTION", "SYSTEM", "ERROR"
+        "source": source,
+        "message": message,
+        "details": details
+    }
+    SYSTEM_LOGS.append(log_entry)
+    if len(SYSTEM_LOGS) > 200:
+        SYSTEM_LOGS.pop(0)
+
 REGISTRY_DB_PATH = os.getenv("BFA_REGISTRY_DB_PATH", "bfa_registry_db.json")
 
 # Ephemeral keys generated on load (unless loaded from env/files)
-GATEWAY_PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+GATEWAY_PRIVATE_KEY = ed25519.Ed25519PrivateKey.generate()
 GATEWAY_PUBLIC_KEY = GATEWAY_PRIVATE_KEY.public_key()
 
 # Memory databases for challenge-response handshake
 CHALLENGES: Dict[str, str] = {} # node_id -> challenge_hex
-REGISTERED_NODES: Dict[str, Dict[str, Any]] = {} # node_id -> {"public_key": rsa_pubkey_obj, "channels": list}
+REGISTERED_NODES: Dict[str, Dict[str, Any]] = {} # node_id -> {"public_key": ed25519_pubkey_obj, "channels": list}
+
+class BFAStorageManager:
+    """
+    Manages persistence of registered endpoints.
+    Supports standard local JSON files and DynamoDB-based storage with Optimistic Locking.
+    """
+    @staticmethod
+    def load_registry() -> Dict[str, Any]:
+        table_name = os.getenv("BFA_DYNAMODB_TABLE")
+        if table_name:
+            try:
+                import boto3
+                dynamodb = boto3.resource("dynamodb")
+                table = dynamodb.Table(table_name)
+                response = table.get_item(Key={"registry_id": "default"})
+                item = response.get("Item")
+                if item:
+                    return {
+                        "agent_endpoints": item.get("agent_endpoints", []),
+                        "mcp_endpoints": item.get("mcp_endpoints", []),
+                        "version": int(item.get("version", 1))
+                    }
+                return {"agent_endpoints": [], "mcp_endpoints": [], "version": 1}
+            except Exception as e:
+                print(f"BFAStorageManager: Error loading from DynamoDB: {e}")
+                return {"agent_endpoints": [], "mcp_endpoints": [], "version": 1}
+        else:
+            if not os.path.exists(REGISTRY_DB_PATH):
+                return {"agent_endpoints": [], "mcp_endpoints": [], "version": 1}
+            try:
+                with open(REGISTRY_DB_PATH, "r") as f:
+                    data = json.load(f)
+                    return {
+                        "agent_endpoints": data.get("agent_endpoints", []),
+                        "mcp_endpoints": data.get("mcp_endpoints", []),
+                        "version": 1
+                    }
+            except Exception as e:
+                print(f"BFAStorageManager: Error loading from local DB: {e}")
+                return {"agent_endpoints": [], "mcp_endpoints": [], "version": 1}
+
+    @staticmethod
+    def save_registry(data: Dict[str, Any], max_retries: int = 5) -> bool:
+        table_name = os.getenv("BFA_DYNAMODB_TABLE")
+        if table_name:
+            import boto3
+            import time
+            from botocore.exceptions import ClientError
+            
+            dynamodb = boto3.resource("dynamodb")
+            table = dynamodb.Table(table_name)
+            
+            retries = 0
+            backoff = 0.1
+            
+            while retries < max_retries:
+                current_reg = BFAStorageManager.load_registry()
+                current_version = current_reg.get("version", 1)
+                
+                updated_agent = list(set(current_reg["agent_endpoints"] + data.get("agent_endpoints", [])))
+                updated_mcp = list(set(current_reg["mcp_endpoints"] + data.get("mcp_endpoints", [])))
+                
+                try:
+                    table.put_item(
+                        Item={
+                            "registry_id": "default",
+                            "agent_endpoints": updated_agent,
+                            "mcp_endpoints": updated_mcp,
+                            "version": current_version + 1
+                        },
+                        ConditionExpression="attribute_not_exists(version) OR version = :ver",
+                        ExpressionAttributeValues={":ver": current_version}
+                    )
+                    print(f"BFAStorageManager: Successfully saved to DynamoDB (v{current_version + 1}).")
+                    return True
+                except ClientError as e:
+                    if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                        retries += 1
+                        print(f"BFAStorageManager: Concurrency conflict detected. Retry {retries}/{max_retries}...")
+                        time.sleep(backoff)
+                        backoff *= 2
+                    else:
+                        print(f"BFAStorageManager: DynamoDB ClientError: {e}")
+                        return False
+                except Exception as e:
+                    print(f"BFAStorageManager: DynamoDB Error: {e}")
+                    return False
+            print("BFAStorageManager Error: Failed to save registry to DynamoDB due to lock contention.")
+            return False
+        else:
+            try:
+                file_data = {
+                    "agent_endpoints": data.get("agent_endpoints", []),
+                    "mcp_endpoints": data.get("mcp_endpoints", [])
+                }
+                with open(REGISTRY_DB_PATH, "w") as f:
+                    json.dump(file_data, f, indent=2)
+                return True
+            except Exception as e:
+                print(f"BFAStorageManager: Error saving to local DB: {e}")
+                return False
 
 def load_persisted_endpoints() -> Dict[str, List[str]]:
     """
-    Load persisted endpoints from the local JSON registry database.
+    Load persisted endpoints using BFAStorageManager.
     """
-    if not os.path.exists(REGISTRY_DB_PATH):
-        return {"agent_endpoints": [], "mcp_endpoints": []}
-    try:
-        with open(REGISTRY_DB_PATH, "r") as f:
-            data = json.load(f)
-            return {
-                "agent_endpoints": data.get("agent_endpoints", []),
-                "mcp_endpoints": data.get("mcp_endpoints", [])
-            }
-    except Exception as e:
-        print(f"IRC-A Gateway: Error loading persisted registry DB: {e}")
-        return {"agent_endpoints": [], "mcp_endpoints": []}
-
+    reg = BFAStorageManager.load_registry()
+    return {
+        "agent_endpoints": reg["agent_endpoints"],
+        "mcp_endpoints": reg["mcp_endpoints"]
+    }
 
 def persist_endpoint(type_: str, url: str):
     """
-    Save a registered endpoint dynamically to the database.
+    Save a registered endpoint dynamically using BFAStorageManager.
     """
-    data = load_persisted_endpoints()
+    reg = BFAStorageManager.load_registry()
     key = "agent_endpoints" if type_ == "agent" else "mcp_endpoints"
-    if url not in data[key]:
-        data[key].append(url)
-        try:
-            with open(REGISTRY_DB_PATH, "w") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"IRC-A Gateway: Error saving to persisted registry DB: {e}")
+    if url not in reg[key]:
+        reg[key].append(url)
+        BFAStorageManager.save_registry(reg)
 
 
 async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
@@ -233,6 +339,10 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         )
         return {"public_key": pem.decode("utf-8")}
 
+    @app.get("/logs")
+    def get_logs():
+        return SYSTEM_LOGS
+
     @app.post("/register/init")
     def register_init(payload: Dict[str, Any]):
         node_id = payload.get("node_id")
@@ -246,6 +356,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "channels": channels,
             "public_key": None
         }
+        add_system_log("REGISTRATION", node_id, "Initiated challenge-response handshake.")
         return {"challenge_bytes": challenge_bytes}
 
     @app.post("/register/verify")
@@ -266,29 +377,29 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             sig_bytes = bytes.fromhex(signature_hex)
             pubkey.verify(
                 sig_bytes,
-                challenge.encode("utf-8"),
-                padding.PKCS1v15(),
-                hashes.SHA256()
+                challenge.encode("utf-8")
             )
         except InvalidSignature:
+            add_system_log("ERROR", node_id, "Handshake validation failed: Invalid cryptographic signature.")
             raise HTTPException(status_code=401, detail="Invalid cryptographic signature")
         except Exception as e:
+            add_system_log("ERROR", node_id, f"Handshake validation failed with exception: {e}")
             raise HTTPException(status_code=400, detail=f"Failed to verify signature: {e}")
             
         REGISTERED_NODES[node_id]["public_key"] = pubkey
         del CHALLENGES[node_id]
         
         expiry = int(time.time()) + 3600
-        session_token = jwt.encode(
+        session_token = sign_paseto_v4_public(
             {
                 "sub": node_id,
                 "channels": REGISTERED_NODES[node_id]["channels"],
                 "exp": expiry
             },
-            GATEWAY_PRIVATE_KEY,
-            algorithm="RS256"
+            GATEWAY_PRIVATE_KEY
         )
         
+        add_system_log("REGISTRATION", node_id, "Handshake verified. Session token generated successfully.")
         return {"session_token": session_token, "expiry": expiry}
 
     @app.post("/register/disconnect")
@@ -307,7 +418,10 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         # 2. Remove associated capabilities from semantic search registry
         keys_to_remove = []
         for key, value in list(ROUTER.registry.items()):
-            if key == node_id or value.get("url") == node_id or value.get("server_url") == node_id:
+            if (key == node_id or 
+                value.get("node_id") == node_id or 
+                value.get("url") == node_id or 
+                value.get("server_url") == node_id):
                 keys_to_remove.append(key)
             elif value.get("type") == "agent" and key.startswith(node_id):
                 keys_to_remove.append(key)
@@ -320,6 +434,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         if ROUTER:
             ROUTER.build_index()
             
+        add_system_log("REGISTRATION", node_id, f"Node successfully disconnected. Removed {len(keys_to_remove)} capabilities from FAISS.")
         return {
             "status": "success",
             "message": f"Node '{node_id}' successfully disconnected and removed from FAISS index."
@@ -339,17 +454,15 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             raise HTTPException(status_code=401, detail="Missing session_token")
             
         try:
-            decoded_session = jwt.decode(
-                auth_header,
-                GATEWAY_PUBLIC_KEY,
-                algorithms=["RS256"]
-            )
+            decoded_session = verify_paseto_v4_public(auth_header, GATEWAY_PUBLIC_KEY)
             caller_id = decoded_session["sub"]
             caller_channels = decoded_session.get("channels", ["#public"])
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Session token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid session token")
+            if decoded_session.get("exp", 0) < time.time():
+                raise HTTPException(status_code=401, detail="Session token expired")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Invalid session token: {e}")
             
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
@@ -357,6 +470,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         result = ROUTER.resolve(query, agent_channels=caller_channels)
         best = result.get("best")
         if not best:
+            add_system_log("DISCOVERY", caller_id, f"Failed discovery: No capability found matching query '{query}' under authorized channels.")
             raise HTTPException(status_code=404, detail="No matching capability found under authorized channels")
             
         target_node_id = best["skill"]
@@ -373,21 +487,25 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         if campaign_match:
             restricted_params["campaign_id"] = campaign_match.group(1)
             
+        import uuid
         det_expiry = int(time.time()) + 60
-        det = jwt.encode(
+        det = sign_paseto_v4_public(
             {
+                "jti": str(uuid.uuid4()),
+                "iss": "irca-gateway",
                 "sub": caller_id,
                 "aud": target_node_id,
                 "permitted_action": best["data"]["name"],
                 "restricted_params": restricted_params,
-                "exp": det_expiry
+                "exp": det_expiry,
+                "iat": int(time.time())
             },
-            GATEWAY_PRIVATE_KEY,
-            algorithm="RS256"
+            GATEWAY_PRIVATE_KEY
         )
         
         target_url = best["data"].get("url") or best["data"].get("server_url")
         
+        add_system_log("DISCOVERY", caller_id, f"Resolved query '{query}' -> target '{target_node_id}' ({target_url}). Mints DET token.")
         return {
             "status": "success",
             "det": det,
@@ -395,9 +513,37 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "target_node_id": target_node_id,
             "type": target_type
         }
+ 
+    @app.post("/mint")
+    def mint_token(payload: Dict[str, Any]):
+        """
+        Manually mint a DET token for a custom target and action.
+        """
+        target_node_id = payload.get("target_node_id")
+        permitted_action = payload.get("permitted_action")
+        restricted_params = payload.get("restricted_params", {})
+        if not target_node_id or not permitted_action:
+            raise HTTPException(status_code=400, detail="Missing target_node_id or permitted_action")
+        import uuid
+        det_expiry = int(time.time()) + 3600
+        det = sign_paseto_v4_public(
+            {
+                "jti": str(uuid.uuid4()),
+                "iss": "irca-gateway-admin",
+                "sub": "gateway-admin",
+                "aud": target_node_id,
+                "permitted_action": permitted_action,
+                "restricted_params": restricted_params,
+                "exp": det_expiry,
+                "iat": int(time.time())
+            },
+            GATEWAY_PRIVATE_KEY
+        )
+        add_system_log("SYSTEM", "Gateway", f"Manually minted DET token for target '{target_node_id}', action '{permitted_action}'")
+        return {"det": det}
 
     @app.post("/register/agent")
-    async def register_agent(url: str, channels: str = "#public"):
+    async def register_agent(url: str, channels: str = "#public", node_id: str = None, payload: Dict[str, Any] = None):
         """
         Dynamically register a new A2A Agent URL in runtime, index it in FAISS, and persist it.
         """
@@ -406,24 +552,61 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         new_agents = await discover_agents([url])
         if not new_agents:
+            add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for Agent at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover agent at {url}")
             
         channel_list = [ch.strip() for ch in channels.split(",") if ch.strip()]
         for skill_id in new_agents:
             new_agents[skill_id]["channels"] = channel_list
+            new_agents[skill_id]["node_id"] = node_id or skill_id
+            if payload and "precomputed_embeddings" in payload:
+                pre_embs = payload["precomputed_embeddings"]
+                if skill_id in pre_embs:
+                    new_agents[skill_id]["precomputed_embedding"] = pre_embs[skill_id]
+            
+        # Prevent registration of duplicate IDs or identical semantic metadata
+        for skill_id, item in new_agents.items():
+            if skill_id in ROUTER.registry:
+                raise HTTPException(status_code=409, detail=f"Conflict: Agent skill ID '{skill_id}' is already registered.")
+            
+            tags_str = " ".join(item.get("tags", []))
+            examples_str = " ".join(item.get("examples", []))
+            new_search_text = " ".join([
+                item.get("name", ""),
+                item.get("description", ""),
+                tags_str,
+                examples_str
+            ]).strip().lower()
+ 
+            for existing_id, existing_item in ROUTER.registry.items():
+                existing_tags_str = " ".join(existing_item.get("tags", []))
+                existing_examples_str = " ".join(existing_item.get("examples", []))
+                existing_search_text = " ".join([
+                    existing_item.get("name", ""),
+                    existing_item.get("description", ""),
+                    existing_tags_str,
+                    existing_examples_str
+                ]).strip().lower()
+ 
+                if new_search_text == existing_search_text:
+                    raise HTTPException(
+                        status_code=409, 
+                        detail=f"Conflict: An agent/tool with identical semantic metadata is already registered ('{existing_id}')."
+                    )
             
         ROUTER.update_registry(new_agents)
         ROUTER.build_index()
         
         persist_endpoint("agent", url)
+        add_system_log("REGISTRATION", node_id or list(new_agents.keys())[0], f"Successfully registered Agent at {url} on channels {channels}.")
         return {
             "status": "success",
             "message": f"Successfully registered Agent at {url}",
             "registered_skills": list(new_agents.keys())
         }
-
+ 
     @app.post("/register/mcp")
-    async def register_mcp(url: str, channels: str = "#public"):
+    async def register_mcp(url: str, channels: str = "#public", node_id: str = None, payload: Dict[str, Any] = None):
         """
         Dynamically register a new MCP Server URL in runtime, index its tools in FAISS, and persist it.
         """
@@ -432,16 +615,53 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         new_tools = await discover_tools([url])
         if not new_tools:
+            add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for MCP tools at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover MCP tools at {url}")
             
         channel_list = [ch.strip() for ch in channels.split(",") if ch.strip()]
         for tool_name in new_tools:
             new_tools[tool_name]["channels"] = channel_list
+            new_tools[tool_name]["node_id"] = node_id or url
+            if payload and "precomputed_embeddings" in payload:
+                pre_embs = payload["precomputed_embeddings"]
+                if tool_name in pre_embs:
+                    new_tools[tool_name]["precomputed_embedding"] = pre_embs[tool_name]
+            
+        # Prevent registration of duplicate IDs or identical semantic metadata
+        for tool_name, item in new_tools.items():
+            if tool_name in ROUTER.registry:
+                raise HTTPException(status_code=409, detail=f"Conflict: Tool name '{tool_name}' is already registered.")
+            
+            tags_str = " ".join(item.get("tags", []))
+            examples_str = " ".join(item.get("examples", []))
+            new_search_text = " ".join([
+                item.get("name", ""),
+                item.get("description", ""),
+                tags_str,
+                examples_str
+            ]).strip().lower()
+ 
+            for existing_id, existing_item in ROUTER.registry.items():
+                existing_tags_str = " ".join(existing_item.get("tags", []))
+                existing_examples_str = " ".join(existing_item.get("examples", []))
+                existing_search_text = " ".join([
+                    existing_item.get("name", ""),
+                    existing_item.get("description", ""),
+                    existing_tags_str,
+                    existing_examples_str
+                ]).strip().lower()
+ 
+                if new_search_text == existing_search_text:
+                    raise HTTPException(
+                        status_code=409, 
+                        detail=f"Conflict: An agent/tool with identical semantic metadata is already registered ('{existing_id}')."
+                    )
             
         ROUTER.update_registry(new_tools)
         ROUTER.build_index()
         
         persist_endpoint("mcp", url)
+        add_system_log("REGISTRATION", node_id or "MCP Server", f"Successfully registered MCP Server at {url} with {len(new_tools)} tools.")
         return {
             "status": "success",
             "message": f"Successfully registered MCP Server at {url}",

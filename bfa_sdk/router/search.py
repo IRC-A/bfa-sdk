@@ -24,34 +24,50 @@ class BFASemanticRouter:
     def build_index(self):
         """
         Rebuilds the FAISS vector index based on registered agent and tool metadata.
+        Bypasses embedding generator for nodes supplying pre-computed embeddings.
         """
         import faiss
         
         self.index_keys = []
-        corpus_texts = []
+        texts_to_embed = []
+        keys_to_embed = []
+        precomputed_embeddings = {}
 
         for skill_id, item in self.registry.items():
-            # Build semantic search text
-            tags_str = " ".join(item.get("tags", []))
-            examples_str = " ".join(item.get("examples", []))
-            search_text = item.get("search_text") or " ".join([
-                item.get("name", ""),
-                item.get("description", ""),
-                tags_str,
-                examples_str
-            ])
-            
-            corpus_texts.append(search_text)
-            self.index_keys.append(skill_id)
+            if "precomputed_embedding" in item and item["precomputed_embedding"] is not None:
+                precomputed_embeddings[skill_id] = item["precomputed_embedding"]
+                self.index_keys.append(skill_id)
+            else:
+                tags_str = " ".join(item.get("tags", []))
+                examples_str = " ".join(item.get("examples", []))
+                search_text = item.get("search_text") or " ".join([
+                    item.get("name", ""),
+                    item.get("description", ""),
+                    tags_str,
+                    examples_str
+                ])
+                texts_to_embed.append(search_text)
+                keys_to_embed.append(skill_id)
 
-        if not corpus_texts:
+        # Generate missing embeddings
+        generated_embeddings = []
+        if texts_to_embed:
+            generated_embeddings = self.embedder.embed_documents(texts_to_embed)
+
+        all_embeddings = []
+        # First add the ones that were generated
+        for key, emb in zip(keys_to_embed, generated_embeddings):
+            all_embeddings.append(emb)
+            self.index_keys.append(key)
+        # Next add the pre-computed ones
+        for key in precomputed_embeddings:
+            all_embeddings.append(precomputed_embeddings[key])
+
+        if not all_embeddings:
             self.index = None
             return
 
-        # Generate embeddings
-        embeddings = self.embedder.embed_documents(corpus_texts)
-        embeddings_np = np.array(embeddings).astype("float32")
-        
+        embeddings_np = np.array(all_embeddings).astype("float32")
         dimension = embeddings_np.shape[1]
         
         # L2 Distance Indexing

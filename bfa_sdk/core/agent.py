@@ -3,7 +3,8 @@
 import abc
 import os
 import httpx
-import jwt
+import json
+import time
 import asyncio
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
@@ -19,8 +20,9 @@ from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
 from a2a.helpers import new_text_message
 from a2a.types import Role
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+from bfa_sdk.core.paseto import verify_paseto_v4_public
 
 class BFAAgentExecutor(AgentExecutor):
     """
@@ -46,6 +48,104 @@ class BFAAgentExecutor(AgentExecutor):
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue):
         pass
+
+
+class ReplayPreventionCache:
+    def __init__(self, maxsize=1000):
+        import collections
+        self.cache = collections.OrderedDict()
+        self.maxsize = maxsize
+
+    def check_and_add(self, jti: str) -> bool:
+        if not jti:
+            return False
+        if jti in self.cache:
+            return True
+        self.cache[jti] = True
+        if len(self.cache) > self.maxsize:
+            self.cache.popitem(last=False)
+        return False
+
+
+class BFADETValidationMiddleware(BaseHTTPMiddleware):
+    """
+    Enforces zero-trust dynamic authorization at the recipient agent node.
+    Verifies the PASETO v4.public signature, clock skew, parameters, and jti replay.
+    """
+    def __init__(self, app, agent_instance):
+        super().__init__(app)
+        self.agent_instance = agent_instance
+        
+    async def dispatch(self, request, call_next):
+        if request.method == "POST" and request.url.path == "/":
+            auth = request.headers.get("authorization")
+            token = None
+            if auth and auth.lower().startswith("bearer "):
+                token = auth[7:].strip()
+            else:
+                token = request.headers.get("x-det") or request.headers.get("x-irca-det")
+                
+            if not self.agent_instance.gateway_public_key and not token:
+                return await call_next(request)
+                
+            if not token:
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32001,
+                            "message": "Unauthorized: Missing IRC-A Delegated Execution Token (DET)"
+                        },
+                        "id": None
+                    },
+                    status_code=401
+                )
+                
+            body = await request.body()
+            try:
+                rpc_payload = json.loads(body.decode('utf-8'))
+                method_name = rpc_payload.get("method")
+                params = rpc_payload.get("params", {})
+                runtime_args = {}
+                if isinstance(params, dict):
+                    msg = params.get("message", {})
+                    if isinstance(msg, dict):
+                        parts = msg.get("parts", [])
+                        if parts and isinstance(parts[0], dict):
+                            query_text = parts[0].get("text", "")
+                            import re
+                            customer_match = re.search(r"customer\s+(?:id-)?(\w+)", query_text, re.IGNORECASE)
+                            if customer_match:
+                                runtime_args["customer_id"] = customer_match.group(1)
+                            campaign_match = re.search(r"campaign\s+(\S+)", query_text, re.IGNORECASE)
+                            if campaign_match:
+                                runtime_args["campaign_id"] = campaign_match.group(1)
+            except Exception:
+                method_name = "SendMessage"
+                runtime_args = {}
+                
+            async def receive():
+                return {"type": "http.request", "body": body, "more_body": False}
+            request._receive = receive
+            
+            is_valid = self.agent_instance.verify_incoming_det(token, method_name, runtime_args)
+            if not is_valid:
+                is_valid = self.agent_instance.verify_incoming_det(token, self.agent_instance.agent_id, runtime_args)
+                
+            if not is_valid:
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32001,
+                            "message": "Unauthorized: Invalid or expired IRC-A DET Token"
+                        },
+                        "id": None
+                    },
+                    status_code=401
+                )
+                
+        return await call_next(request)
 
 
 class IRCAHeaderTracingMiddleware(BaseHTTPMiddleware):
@@ -111,10 +211,11 @@ class BFAAgent(abc.ABC):
         self.url = url
         self.version = version
         self.gateway_url = gateway_url or os.getenv("BFA_GATEWAY_URL")
+        self.replay_cache = ReplayPreventionCache()
 
         # Load/Generate keys
         if private_key is None:
-            self._private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            self._private_key = ed25519.Ed25519PrivateKey.generate()
         elif isinstance(private_key, str):
             self._private_key = serialization.load_pem_private_key(private_key.encode("utf-8"), password=None)
         else:
@@ -183,6 +284,7 @@ class BFAAgent(abc.ABC):
         routes.extend(create_agent_card_routes(self.agent_card))
         routes.extend(create_jsonrpc_routes(request_handler=self.http_handler, rpc_url="/"))
         self.app = Starlette(routes=routes)
+        self.app.add_middleware(BFADETValidationMiddleware, agent_instance=self)
         self.app.add_middleware(IRCAHeaderTracingMiddleware, agent_instance=self)
 
         # Register shutdown hook to disconnect from Gateway cleanly
@@ -271,9 +373,7 @@ class BFAAgent(abc.ABC):
                 
                 # 2. Sign Challenge
                 signature = self._private_key.sign(
-                    challenge.encode("utf-8"),
-                    padding.PKCS1v15(),
-                    hashes.SHA256()
+                    challenge.encode("utf-8")
                 )
                 
                 # 3. Verify Challenge and obtain Session JWT
@@ -291,7 +391,7 @@ class BFAAgent(abc.ABC):
                     # Also register URL/channels in gateway index
                     await client.post(
                         fallback_url,
-                        params={"url": self.url, "channels": ",".join(self.channels)},
+                        params={"url": self.url, "channels": ",".join(self.channels), "node_id": self.agent_id},
                         timeout=5
                     )
                     print(f"BFAAgent: Successfully registered '{self.agent_id}' via cryptographic handshake.")
@@ -304,7 +404,7 @@ class BFAAgent(abc.ABC):
                 async with httpx.AsyncClient() as client:
                     res_simple = await client.post(
                         fallback_url,
-                        params={"url": self.url, "channels": ",".join(self.channels)},
+                        params={"url": self.url, "channels": ",".join(self.channels), "node_id": self.agent_id},
                         timeout=5
                     )
                     if res_simple.status_code == 200:
@@ -325,24 +425,41 @@ class BFAAgent(abc.ABC):
         if not self.gateway_public_key:
             return False
         try:
-            decoded_det = jwt.decode(
-                delegated_token, 
-                self.gateway_public_key, 
-                algorithms=["RS256"],
-                audience=self.agent_id
-            )
+            decoded_det = verify_paseto_v4_public(delegated_token, self.gateway_public_key)
             
+            # Clock skew validation (5s tolerance)
+            exp = decoded_det.get("exp", 0)
+            if exp + 5 < time.time():
+                print("BFAAgent verify_incoming_det failed: Token expired")
+                return False
+                
+            # Replay Attack prevention check
+            jti = decoded_det.get("jti")
+            if self.replay_cache.check_and_add(jti):
+                print(f"BFAAgent verify_incoming_det failed: Replay attack detected for jti '{jti}'")
+                return False
+            
+            # Audience validation
+            aud = decoded_det.get("aud")
+            if aud not in (self.agent_id, expected_function):
+                print(f"BFAAgent verify_incoming_det failed: aud '{aud}' not in {(self.agent_id, expected_function)}")
+                return False
+
             # Scope validation
-            if decoded_det.get("permitted_action") != expected_function:
+            permitted = decoded_det.get("permitted_action")
+            if permitted != expected_function:
+                print(f"BFAAgent verify_incoming_det failed: permitted_action '{permitted}' != expected_function '{expected_function}'")
                 return False
                 
             # Parameter lockdown verification
             for key, value in decoded_det.get("restricted_params", {}).items():
                 if runtime_args.get(key) != value:
+                    print(f"BFAAgent verify_incoming_det failed: parameter '{key}' lockdown failed. Expected '{value}', got '{runtime_args.get(key)}'")
                     return False
             
             return True
-        except Exception:
+        except Exception as e:
+            print(f"BFAAgent verify_incoming_det exception: {e}")
             return False
 
     @abc.abstractmethod

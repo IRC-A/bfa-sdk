@@ -2,14 +2,30 @@
 # Licensed under AGPLv3 / Commercial Dual License.
 import inspect
 import os
-import jwt
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Callable
 from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+from bfa_sdk.core.paseto import verify_paseto_v4_public
+
+class ReplayPreventionCache:
+    def __init__(self, maxsize=1000):
+        import collections
+        self.cache = collections.OrderedDict()
+        self.maxsize = maxsize
+
+    def check_and_add(self, jti: str) -> bool:
+        if not jti:
+            return False
+        if jti in self.cache:
+            return True
+        self.cache[jti] = True
+        if len(self.cache) > self.maxsize:
+            self.cache.popitem(last=False)
+        return False
 
 class BFAMCP:
     """
@@ -23,9 +39,10 @@ class BFAMCP:
         self.mcp = FastMCP(name, **kwargs)
         self.tool_metadata: Dict[str, Dict[str, Any]] = {}
         self.gateway_url = gateway_url or os.getenv("BFA_GATEWAY_URL")
+        self.replay_cache = ReplayPreventionCache()
         
         # Load/Generate keys
-        self._private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self._private_key = ed25519.Ed25519PrivateKey.generate()
         self._public_key = self._private_key.public_key()
         
         if isinstance(gateway_public_key, str):
@@ -189,15 +206,35 @@ class BFAMCP:
         Enforces Gateway signature check, scope limit, and parameter constraints.
         """
         if not self.gateway_public_key:
-            print("BFAMCP verify_incoming_det check failed: gateway_public_key is None")
-            return False
+            if self.gateway_url:
+                try:
+                    import httpx
+                    res = httpx.get(f"{self.gateway_url.rstrip('/')}/public_key", timeout=3)
+                    if res.status_code == 200:
+                        pem_str = res.json().get("public_key")
+                        self.gateway_public_key = serialization.load_pem_public_key(pem_str.encode("utf-8"))
+                        print("BFAMCP: Lazily downloaded gateway public key successfully.")
+                except Exception as e:
+                    print(f"BFAMCP Warning: Failed to lazily fetch gateway public key: {e}")
+
+            if not self.gateway_public_key:
+                print("BFAMCP verify_incoming_det check failed: gateway_public_key is None")
+                return False
         try:
-            decoded_det = jwt.decode(
-                delegated_token,
-                self.gateway_public_key,
-                algorithms=["RS256"],
-                options={"verify_aud": False}
-            )
+            import time
+            decoded_det = verify_paseto_v4_public(delegated_token, self.gateway_public_key)
+            
+            # Clock skew validation (5s tolerance)
+            exp = decoded_det.get("exp", 0)
+            if exp + 5 < time.time():
+                print("BFAMCP verify_incoming_det check failed: Token expired")
+                return False
+                
+            # Replay Attack prevention check
+            jti = decoded_det.get("jti")
+            if self.replay_cache.check_and_add(jti):
+                print(f"BFAMCP verify_incoming_det check failed: Replay attack detected for jti '{jti}'")
+                return False
             
             # Audience validation (accepts server node_id or expected_action)
             aud = decoded_det.get("aud")
@@ -259,8 +296,6 @@ class BFAMCP:
         falling back to simple registration if unsupported.
         """
         import httpx
-        from cryptography.hazmat.primitives.asymmetric import padding
-        from cryptography.hazmat.primitives import hashes
         
         import asyncio
         # Delay slightly to allow the local FastMCP port to bind and listen
@@ -284,7 +319,7 @@ class BFAMCP:
                             self.gateway_public_key = load_pem_public_key(pem_str.encode("utf-8"))
                     except Exception as e:
                         print(f"BFAMCP Warning: Could not download gateway public key during registration: {e}")
-
+ 
                 res = await client.post(init_url, json={"node_id": self.node_id, "channels": self.channels}, timeout=5)
                 if res.status_code in (404, 405, 501):
                     raise NotImplementedError("Gateway does not support cryptographic challenge-response")
@@ -294,9 +329,7 @@ class BFAMCP:
                 
                 # 2. Sign Challenge
                 signature = self._private_key.sign(
-                    challenge.encode("utf-8"),
-                    padding.PKCS1v15(),
-                    hashes.SHA256()
+                    challenge.encode("utf-8")
                 )
                 
                 # 3. Verify Challenge
@@ -318,7 +351,7 @@ class BFAMCP:
                     # Also register URL/channels
                     await client.post(
                         fallback_url,
-                        params={"url": mcp_url, "channels": ",".join(self.channels)},
+                        params={"url": mcp_url, "channels": ",".join(self.channels), "node_id": self.node_id},
                         timeout=5
                     )
                     print(f"BFAMCP: Successfully registered '{self.node_id}' via cryptographic handshake.")
@@ -331,7 +364,7 @@ class BFAMCP:
                 async with httpx.AsyncClient() as client:
                     res_simple = await client.post(
                         fallback_url,
-                        params={"url": mcp_url, "channels": ",".join(self.channels)},
+                        params={"url": mcp_url, "channels": ",".join(self.channels), "node_id": self.node_id},
                         timeout=5
                     )
                     if res_simple.status_code == 200:

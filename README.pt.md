@@ -36,10 +36,11 @@ graph TD
 ## Principais Recursos
 
 1. **Roteamento Semântico baseado em FAISS:** Em vez de fazer correspondência exata de palavras-chave (como o BM25), o BFA Gateway indexa as descrições, tags e exemplos dos agentes e ferramentas em um índice vetorial local FAISS. Isso resolve consultas mesmo quando sinônimos são usados (ex: associar *"plástico"* a *"cartão de crédito"*).
-2. **Abstração `BFAAgent`:** Simplifica a criação de agentes A2A usando o `a2a-sdk` e Starlette. Força a declaração de metadatos essenciais (`tags`, `examples`, `description`) exigidos para a indexação vetorial.
-3. **Abstração `BFAMCP`:** Envolve e estende servidores `FastMCP`. Expõe automaticamente um endpoint padronizado `/tools` contendo schemas de entrada, descrições e tags/exemplos customizados para descoberta.
-4. **Segurança IRC-A Segura por Design (Roadmap):** Emprega handshakes de registro usando challenge-response assimétrico, mascaramento de canais lógicos (via variáveis `.env` de nível de contêiner `IRCA_CHANNELS`) para segregar espaços de busca vetorial, e tokens DET (Delegated Execution Tokens) efêmeros para habilitar a invocação direta P2P descentralizada sem gargalos no gateway.
-5. **Pronto para Serverless (AWS Lambda):** Inclui um adaptador **Mangum** embutido no Gateway. Combinado com o driver de nuvem `OpenAIEmbedder`, o BFA Gateway roda em Lambda sob demanda com cold-start zero.
+2. **Abstração `BFAAgent`:** Simplifica a criação de agentes A2A usando o `a2a-sdk` e Starlette. Força a declaração de metadatos essenciais (`tags`, `examples`, `description`) exigidos para la indexação vetorial.
+3. **Abstração `BFAInteractiveAgent` (NOVO):** Um nó pai especializado para Agentes Frontend ou Coordenadores. Ele gerencia automaticamente um Stack de Memória de Execução por sessão e permite delegar subtarefas a outros agentes da rede via `delegate_task()` usando chaves semânticas limpas, evitando a saturação da rede com históricos de chat extensos.
+4. **Abstração `BFAMCP`:** Envolve e estende servidores `FastMCP`. Expõe automaticamente um endpoint padronizado `/tools` contendo schemas de entrada, descrições e tags/exemplos customizados para descoberta.
+5. **Segurança IRC-A Segura por Design (Roadmap):** Emprega handshakes de registro usando challenge-response assimétrico, mascaramento de canais lógicos (via variáveis `.env` de nível de contêiner `IRCA_CHANNELS`) para segregar espaços de busca vetorial, e tokens DET (Delegated Execution Tokens) efêmeros para habilitar a invocação direta P2P descentralizada sem gargalos no gateway.
+6. **Pronto para Serverless (AWS Lambda):** Inclui um adaptador **Mangum** embutido no Gateway. Combinado com o driver de nuvem `OpenAIEmbedder`, o BFA Gateway roda em Lambda sob demanda com cold-start zero.
 
 ---
 

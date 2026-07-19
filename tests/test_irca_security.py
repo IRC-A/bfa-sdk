@@ -1,9 +1,8 @@
 import pytest
-import jwt
 from starlette.testclient import TestClient
 from starlette.responses import JSONResponse
 from starlette.requests import Request
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 
 from bfa_sdk.core.gateway import create_gateway_app, GATEWAY_PUBLIC_KEY
@@ -11,9 +10,28 @@ from bfa_sdk.core.agent import BFAAgent
 from bfa_sdk.core.mcp import BFAMCP
 from bfa_sdk.router.search import BFASemanticRouter
 from bfa_sdk.router.embedder import DummyEmbedder
+from bfa_sdk.core.paseto import sign_paseto_v4_public, verify_paseto_v4_public
+
+class MockJWT:
+    @staticmethod
+    def encode(payload, key, algorithm=None):
+        import uuid
+        import time
+        p = payload.copy()
+        if "jti" not in p:
+            p["jti"] = str(uuid.uuid4())
+        if "iat" not in p:
+            p["iat"] = int(time.time())
+        return sign_paseto_v4_public(p, key)
+
+    @staticmethod
+    def decode(token, key, algorithms=None, audience=None, options=None):
+        return verify_paseto_v4_public(token, key)
+
+jwt = MockJWT
 
 # 1. Setup mock keys for testing
-TEST_PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+TEST_PRIVATE_KEY = ed25519.Ed25519PrivateKey.generate()
 TEST_PUBLIC_KEY = TEST_PRIVATE_KEY.public_key()
 TEST_PUB_PEM = TEST_PUBLIC_KEY.public_bytes(
     encoding=serialization.Encoding.PEM,
@@ -56,12 +74,8 @@ async def test_cryptographic_handshake_and_session_minting(monkeypatch):
     assert len(challenge_bytes) == 64  # Hex representation of 32 bytes
     
     # 2. Solve challenge using agent's private key
-    from cryptography.hazmat.primitives.asymmetric import padding
-    from cryptography.hazmat.primitives import hashes
     signature = TEST_PRIVATE_KEY.sign(
-        challenge_bytes.encode("utf-8"),
-        padding.PKCS1v15(),
-        hashes.SHA256()
+        challenge_bytes.encode("utf-8")
     )
     
     # 3. POST /register/verify
@@ -162,7 +176,7 @@ async def test_offline_det_verification_and_parameter_lockdown():
         get_balance(customer_id="999", delegated_token=valid_det)
         
     # Case 3: Invalid DET signature (should fail verification)
-    invalid_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    invalid_key = ed25519.Ed25519PrivateKey.generate()
     invalid_det = jwt.encode(
         {
             "sub": "credit-agent",
@@ -244,7 +258,7 @@ def test_uncovered_key_loading():
     """
     pem_private = TEST_PRIVATE_KEY.private_bytes(
         encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption()
     ).decode("utf-8")
     
@@ -334,39 +348,38 @@ def test_discover_endpoint_failures():
     Tests /discover endpoint error handling.
     """
     app = create_gateway_app()
-    client = TestClient(app)
-    
-    # 1. Missing session token
-    res = client.post("/discover", params={"query": "test"})
-    assert res.status_code == 401
-    assert "Missing session_token" in res.json()["detail"]
-    
-    # 2. Invalid session token
-    res = client.post("/discover", params={"query": "test"}, json={"session_token": "bad-token"})
-    assert res.status_code == 401
-    assert "Invalid session token" in res.json()["detail"]
-    
-    # 3. Expired session token
-    from bfa_sdk.core.gateway import GATEWAY_PRIVATE_KEY
-    import time
-    expired_token = jwt.encode(
-        {"sub": "caller", "channels": ["#public"], "exp": int(time.time()) - 10},
-        GATEWAY_PRIVATE_KEY,
-        algorithm="RS256"
-    )
-    res = client.post("/discover", params={"query": "test"}, json={"session_token": expired_token})
-    assert res.status_code == 401
-    assert "Session token expired" in res.json()["detail"]
-    
-    # 4. No matching capability found
-    valid_token = jwt.encode(
-        {"sub": "caller", "channels": ["#empty-channel"], "exp": int(time.time()) + 100},
-        GATEWAY_PRIVATE_KEY,
-        algorithm="RS256"
-    )
-    res = client.post("/discover", params={"query": "test"}, json={"session_token": valid_token})
-    assert res.status_code == 404
-    assert "No matching capability found" in res.json()["detail"]
+    with TestClient(app) as client:
+        # 1. Missing session token
+        res = client.post("/discover", params={"query": "test"})
+        assert res.status_code == 401
+        assert "Missing session_token" in res.json()["detail"]
+        
+        # 2. Invalid session token
+        res = client.post("/discover", params={"query": "test"}, json={"session_token": "bad-token"})
+        assert res.status_code == 401
+        assert "Invalid session token" in res.json()["detail"]
+        
+        # 3. Expired session token
+        from bfa_sdk.core.gateway import GATEWAY_PRIVATE_KEY
+        import time
+        expired_token = jwt.encode(
+            {"sub": "caller", "channels": ["#public"], "exp": int(time.time()) - 10},
+            GATEWAY_PRIVATE_KEY,
+            algorithm="RS256"
+        )
+        res = client.post("/discover", params={"query": "test"}, json={"session_token": expired_token})
+        assert res.status_code == 401
+        assert "Session token expired" in res.json()["detail"]
+        
+        # 4. No matching capability found
+        valid_token = jwt.encode(
+            {"sub": "caller", "channels": ["#empty-channel"], "exp": int(time.time()) + 100},
+            GATEWAY_PRIVATE_KEY,
+            algorithm="RS256"
+        )
+        res = client.post("/discover", params={"query": "test"}, json={"session_token": valid_token})
+        assert res.status_code == 404
+        assert "No matching capability found" in res.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -427,27 +440,26 @@ async def test_disconnect_and_shutdown_hooks(monkeypatch):
     from unittest.mock import MagicMock
     
     app = create_gateway_app()
-    client = TestClient(app)
-    
-    # 1. Register a mock agent skill first
-    from bfa_sdk.core.gateway import ROUTER
-    ROUTER.update_registry({
-        "test-disconnect-agent": {
-            "name": "disconnect_skill",
-            "description": "test skill",
-            "tags": [],
-            "examples": [],
-            "type": "agent",
-            "url": "http://localhost:8099"
-        }
-    })
-    ROUTER.build_index()
-    assert "test-disconnect-agent" in ROUTER.registry
-    
-    # 2. Call /register/disconnect to kick it
-    res = client.post("/register/disconnect", json={"node_id": "test-disconnect-agent"})
-    assert res.status_code == 200
-    assert "test-disconnect-agent" not in ROUTER.registry
+    with TestClient(app) as client:
+        # 1. Register a mock agent skill first
+        import bfa_sdk.core.gateway as gateway_mod
+        gateway_mod.ROUTER.update_registry({
+            "test-disconnect-agent": {
+                "name": "disconnect_skill",
+                "description": "test skill",
+                "tags": [],
+                "examples": [],
+                "type": "agent",
+                "url": "http://localhost:8099"
+            }
+        })
+        gateway_mod.ROUTER.build_index()
+        assert "test-disconnect-agent" in gateway_mod.ROUTER.registry
+        
+        # 2. Call /register/disconnect to kick it
+        res = client.post("/register/disconnect", json={"node_id": "test-disconnect-agent"})
+        assert res.status_code == 200
+        assert "test-disconnect-agent" not in gateway_mod.ROUTER.registry
     
     # 3. Test BFAAgent shutdown event triggering disconnect call
     disconnect_called = False
@@ -738,38 +750,37 @@ def test_discover_success_flow():
     import bfa_sdk.core.gateway as gateway_mod
     
     app = create_gateway_app()
-    client = TestClient(app)
-    
-    # Register an agent skill semantically with keys.startswith mismatch
-    from bfa_sdk.core.gateway import ROUTER
-    ROUTER.update_registry({
-        "agent-loan-test_skill": {
-            "name": "apply_loan",
-            "description": "processes credit loans",
-            "tags": ["loan"],
-            "examples": ["process loan application"],
-            "type": "agent",
-            "url": "http://localhost:8088"
-        }
-    })
-    ROUTER.build_index()
-    
-    # Mint a valid session token
-    session_token = jwt.encode(
-        {"sub": "caller-client", "channels": ["#public"], "exp": int(time.time()) + 100},
-        GATEWAY_PRIVATE_KEY,
-        algorithm="RS256"
-    )
-    
-    # Test /resolve endpoint (line 212 in gateway.py)
-    res_resolve = client.get("/resolve?query=loan")
-    assert res_resolve.status_code == 200
-    
-    # Call /discover
-    res = client.post("/discover?query=process loan application for customer id-992", json={
-        "session_token": session_token
-    })
-    assert res.status_code == 200
+    with TestClient(app) as client:
+        # Register an agent skill semantically with keys.startswith mismatch
+        import bfa_sdk.core.gateway as gateway_mod
+        gateway_mod.ROUTER.update_registry({
+            "agent-loan-test_skill": {
+                "name": "apply_loan",
+                "description": "processes credit loans",
+                "tags": ["loan"],
+                "examples": ["process loan application"],
+                "type": "agent",
+                "url": "http://localhost:8088"
+            }
+        })
+        gateway_mod.ROUTER.build_index()
+        
+        # Mint a valid session token
+        session_token = jwt.encode(
+            {"sub": "caller-client", "channels": ["#public"], "exp": int(time.time()) + 100},
+            GATEWAY_PRIVATE_KEY,
+            algorithm="RS256"
+        )
+        
+        # Test /resolve endpoint (line 212 in gateway.py)
+        res_resolve = client.get("/resolve?query=loan")
+        assert res_resolve.status_code == 200
+        
+        # Call /discover
+        res = client.post("/discover?query=process loan application for customer id-992", json={
+            "session_token": session_token
+        })
+        assert res.status_code == 200
     data = res.json()
     assert "det" in data
     assert data["url"] == "http://localhost:8088"
@@ -786,7 +797,7 @@ def test_discover_success_flow():
     })
     assert res_camp.status_code == 200
     data_camp = res_camp.json()
-    decoded_camp = jwt.decode(data_camp["det"], GATEWAY_PUBLIC_KEY, algorithms=["RS256"], audience="mock_skill")
+    decoded_camp = jwt.decode(data_camp["det"], GATEWAY_PUBLIC_KEY, algorithms=["RS256"], audience="agent-loan-test_skill")
     assert decoded_camp["restricted_params"]["campaign_id"] == "camp-777"
     
     # Test /register/disconnect with registered node (line 303 in gateway.py)
@@ -797,7 +808,7 @@ def test_discover_success_flow():
     # Test key.startswith(node_id) matching branch in disconnect (line 311 in gateway.py)
     res_disc_starts = client.post("/register/disconnect", json={"node_id": "agent-loan-test"})
     assert res_disc_starts.status_code == 200
-    assert "agent-loan-test_skill" not in ROUTER.registry
+    assert "agent-loan-test_skill" not in gateway_mod.ROUTER.registry
     
     # Verify ROUTER is None condition (line 353 in gateway.py)
     orig_router = gateway_mod.ROUTER
