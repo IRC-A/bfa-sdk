@@ -39,28 +39,28 @@ IRC-A evolves this concept. Instead of conceiving BFA as a monolith or an all-en
 ## 2. The Four Architectural Pillars of IRC-A
 The strength of IRC-A lies in the convergence of software development principles that have defined the most resilient systems of the past decades:
 
-*   **Pillar I: BFA as a Governance and Secure Perimeter**  
-    The BFA does not run the LLM reasoning loops, nor does it maintain physical connections to transactional databases. Its responsibility is to act as the single source of truth for node identities, capabilities, and logical boundaries, managing asymmetric cryptographic handshakes and minting session authorization tokens.
-
-*   **Pillar II: The "Data River" and "Capability Pooling"**  
-    Inspired by classic enterprise event-driven architectures (such as the Data River pattern utilized in high-volume integration platforms), IRC-A assumes that processing capabilities must be available in an agnostic manner to be consumed whenever they are needed.
+*   **Pillar I: The Smalltalk Messaging Philosophy (P2P and Late-Binding)**  
+    In pure Object-Oriented Programming (with Smalltalk as its ultimate exponent), a program is an ecosystem of living, isolated objects communicating strictly via message passing. No object inspects or modifies another's internal memory; they negotiate tasks through messages.
     
-    This evolves into **Capability Pooling**. Tool servers and agents do not register in rigid network paths or static API configurations; instead, they submerge into a shared, vector-indexed pool. The entire corporate processing network floats in this pool, ready to be dynamically discovered and consumed at runtime.
+    Applied to the agentic domain, this defines a strict separation of concerns:
+    *   **Agents Own No Data:** The reasoning nodes are purely cognitive and stateless. They lack direct connections to databases, internal networks, or system credentials.
+    *   **Isolation via MCP:** All data queries, system mutations, or external executions are isolated within dedicated Model Context Protocol (MCP) servers.
+    *   **Decentralized Direct Invocation (P2P & Late-Binding):** The BFA broker does not intermediate business data payloads. Once an agent resolves *where* a capability is via semantic discovery, it performs a direct, late-bound peer-to-peer invocation to the target node, eliminating Gateway network bottlenecks.
 
-*   **Pillar III: The IRC Discovery Protocol (Channel Talk)**  
-    In the 1990s, the IRC (Internet Relay Chat) network protocol demonstrated how thousands of clients and autonomous bots could interact without complex network configurations: they simply connected to a common server (Gateway) and joined (`/JOIN`) shared channels.
-    
-    IRC-A utilizes this analogy to define logical discovery:
-    *   **The IRC Channel:** Agents join logical "conversation rooms." In this distributed environment, when an agent needs to resolve a complex task, it does not perform a rigid service lookup; instead, it broadcasts a message to the Gateway stating: *"Hey, I am looking to resolve tomorrow's weather."*
-    *   **The IRC Operator:** The BFA Gateway semantically maps this intent, locates the matching node (the weather MCP server) that possesses the capability, and exposes the physical contact coordinates to the sender.
+*   **Pillar II: BFA as a Governance and Secure Perimeter**  
+    The BFA (Backend for Agents) does not run the LLM reasoning loops, nor does it maintain physical connections to transactional databases. Its responsibility is to act as the single source of truth for node identities, capabilities, and logical boundaries. It manages asymmetric cryptographic handshakes, maintains the discovery index, and mints short-lived security credentials (DETs).
 
-*   **Pillar IV: The Smalltalk Messaging Philosophy (P2P and Late-Binding)**  
-    In pure Object-Oriented Programming (with Smalltalk as its ultimate exponent), a program is an ecosystem of living objects communicating via message passing, where each object is solely responsible for resolving its own tasks.
+*   **Pillar III: The "Data River" and "Capability Pooling"**  
+    Inspired by classic enterprise event-driven architectures (such as the Data River pattern in high-volume integration systems), processing capabilities in IRC-A are decoupled from static addresses. 
     
-    Applied to the agentic domain, this defines the system's boundary of responsibilities:
-    *   **Agents Own No Data:** The agent is purely cognitive and stateless; it only knows its objective and retains the conversational context of its domain. It lacks direct connections to databases or core system credentials.
-    *   **Isolation via MCP:** All interactions with data, business persistence, or external code execution are the sole responsibility of MCP (Model Context Protocol) servers.
-    *   **Decentralized Direct Invocation (P2P):** The BFA broker does not physically intermediate the transfer of business payloads, avoiding becoming a gateway bottleneck. Once the agent obtains the route and the DET token from the Gateway, it performs a late-binding invocation directly to the corresponding MCP server.
+    Tool servers and agent skills do not register in rigid network paths or configurations; instead, they submerge into a shared, vector-indexed pool. The entire corporate capability directory floats in this pool, ready to be dynamically discovered, matched, and consumed at runtime.
+
+*   **Pillar IV: The IRC Discovery Protocol (Channel Talk)**  
+    The IRC (Internet Relay Chat) protocol demonstrated in the 1990s how thousands of independent entities and autonomous bots could interact securely and dynamically without central coordination: they simply join logical channels.
+    
+    IRC-A utilizes this analogy to define logical discovery boundaries:
+    *   **The IRC Channel:** Nodes partition their capabilities into conversation rooms (e.g., `#finance`, `#aml-audit`).
+    *   **Channel Masking:** The BFA Gateway filters similarity search results based on overlapping channel access. An agent cannot semantically discover or obtain execution tickets for tools outside its logical channels, establishing strict compartment security.
 
 ---
 
