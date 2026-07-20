@@ -94,7 +94,7 @@ The IRC-A topology strictly divides responsibilities into decoupled physical and
 
 #### Cryptographic Vector Representation (Mermaid.js)
 ```mermaid
-graph TD
+graph TB
     %% Style Definitions
     classDef CognitiveLayer fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px,font-weight:bold;
     classDef GatewayLayer fill:#f8cecc,stroke:#b85450,stroke-width:2px,font-weight:bold;
@@ -102,102 +102,92 @@ graph TD
     classDef TokenLayer fill:#e1d5e7,stroke:#9673a6,stroke-width:2px,font-weight:bold;
     classDef ExecutionLayer fill:#d5e8d4,stroke:#82b366,stroke-width:2px,font-weight:bold;
     classDef DBLayer fill:#ffe6cc,stroke:#d79b00,stroke-width:2px,font-weight:bold;
-    classDef Subgraphs fill:#f9f9f9,stroke:#333333,stroke-width:2px,font-weight:bold;
-    classDef BFAPerimeter fill:#ffffff,stroke:#b85450,stroke-width:3px,stroke-dasharray: 5 5,font-weight:bold;
+    classDef Subgraphs fill:#f5f5f5,stroke:#666666,stroke-width:2px,font-weight:bold;
 
-    %% External Components
-    Client[Untrusted Client / Frontend]
-    
-    subgraph ReasoningLayerSub [REASONING LAYER - Stateless Agents Outside BFA]
-        AgentA[Agent Node A<br/>BFAAgent<br/>Env Filters]:::CognitiveLayer
-        AgentB[Agent Node B<br/>BFAAgent<br/>Env Filters]:::CognitiveLayer
+    %% Layer 1: Cognitive Reasoning Layer
+    subgraph Layer1 [COGNITIVE REASONING LAYER - Stateless Agents]
+        agent_a[Agente Nodo A<br/>BaseAgent]:::CognitiveLayer
+        agent_b[Agente Nodo B<br/>BaseAgent]:::CognitiveLayer
+        mcp_tools[MCP Tools<br/>BaseMCP]:::ExecutionLayer
     end
 
-    %% BFA Perimeter strictly contains ONLY the directory / security broker
-    subgraph BFA [BFA - REGISTRY & SEMANTIC CUSTOMS]
-        Broker[BFA Core Broker<br/>Stateless Router]:::GatewayLayer
-        FAISS[(FAISS Index<br/>Intent Mapping)]:::FAISSLayer
-        TokenEngine[Token Minting Engine<br/>DET Issuer - PASETO]:::TokenLayer
+    %% Token Minting Engine (Sits between Layer 1 and 2)
+    token_engine[Token Minting Engine<br/>DET Issuer - PASETO]:::TokenLayer
+
+    %% Layer 2: Support and Semantic Routing Layer
+    subgraph Layer2 [SUPPORT & SEMANTIC ROUTING LAYER - IRC-A / BFA Gateway]
+        bfa_broker[BFA Core Broker<br/>Stateless Router]:::GatewayLayer
+        faiss_index[(FAISS Index<br/>Intent Mapping & Masking)]:::FAISSLayer
+        mcp_server[MCP Server Searcher<br/>Offline DET Validation]:::ExecutionLayer
     end
 
-    subgraph ExecutionLayerSub [EXECUTION LAYER - MCP Servers Outside BFA]
-        MCP[FastMCP Server<br/>Offline DET Validation<br/>Secrets Vault]:::ExecutionLayer
+    %% Layer 3: Execution and Data Access Layer
+    subgraph Layer3 [EXECUTION & DATA ACCESS LAYER]
+        core_app[Core Applications]:::DBLayer
+        apis[APIs]:::CognitiveLayer
+        dbs[(DBs)]:::ExecutionLayer
     end
 
-    %% Core Data Backend (Exclusively accessed by MCP)
-    CoreDB[(Core DB / Internal API<br/>PostgreSQL / Core Banking)]:::DBLayer
+    %% Relations Layer 1
+    agent_a <-->|Protocolo Inter-Agente A2A| agent_b
+    agent_a -->|FastMCP Invocation| mcp_tools
 
-    %% Relationships and Interactions
-    Client -->|Business Request| Broker
-    AgentA <-->|Inter-Agent A2A Protocol| AgentB
-    
-    %% Registration and Discovery Flow
-    AgentA -->|1. POST /register challenge| Broker
-    Broker -->|2. Semantic Search with Mask| FAISS
-    FAISS -->|3. Match Capability + Generate DET| TokenEngine
-    TokenEngine -->|4. Return Route + DET PASETO| AgentA
-    
-    %% DIRECT P2P INVOCATION (Without gateway bottleneck)
-    AgentA -->|5. Direct mTLS Invocation: Params + DET| MCP
-    
-    %% EXCLUSIVE BACKEND CONNECTION
-    MCP -->|6. Sanitized Query / API Call| CoreDB
+    %% Relations Layer 1 -> Layer 2 (Discovery and Registration)
+    agent_a -->|1. Registro de Agente| bfa_broker
+    agent_a -->|2. Consulta Herramientas| bfa_broker
 
-    %% Subgraph Styling
-    style BFA class:BFAPerimeter;
-    style ReasoningLayerSub class:Subgraphs;
-    style ExecutionLayerSub class:Subgraphs;
+    %% Relations within Layer 2
+    bfa_broker -->|3. Búsqueda Semántica con Máscara| faiss_index
+    mcp_server -->|Update Index| faiss_index
+    faiss_index -->|4. Match Habilidad + Generar DET| token_engine
+    token_engine -->|5. Retorna Ruta + DET PASETO Efímero| agent_a
+
+    %% Relations Layer 1 -> Layer 3 (Sandbox Execution Boundary)
+    mcp_tools -->|6. Conexión Exclusiva de Datos| Layer3
+
+    %% Styling subgraphs
+    style Layer1 class:Subgraphs;
+    style Layer2 class:Subgraphs;
+    style Layer3 class:Subgraphs;
 ```
 
 #### Fallback Mono-spaced View (ASCII)
 ```text
- [ Untrusted Client / Frontend ]
-               |
-               | Business Request (Session Token)
-               v
-  +------------------------------------------------------------------------------------------+
-  | REASONING LAYER (Stateless Agents - Outside BFA)                                         |
-  |                                                                                          |
-  |   [ Agent Node A ] <========== A2A Protocol ==========> [ Agent Node B ]                  |
-  |      (BFAAgent)                                            (BFAAgent)                    |
-  |     [Env Filters]                                         [Env Filters]                  |
-  +------------------------------------------------------------------------------------------+
-        ^                      |
-        |                      | 1. POST /register / discover (Sign challenge)
-        |                      |    "I am looking to resolve tomorrow's weather..."
-        |                      v
- .==========================================================================================.
- | BFA (REGISTRY AND SEMANTIC CUSTOMS)                                                      |
- |                                                                                          |
- |   [ BFA Core Broker ] (Stateless Router)                                                 |
- |          |                                                                               |
- |          | 2. Semantic Search with Channel Masking                                       |
- |          v                                                                               |
- |   [ FAISS Index ] (Intent Mapping and Vector Visibility)                                 |
- |          |                                                                               |
- |          | 3. Match Capability + Generate DET                                            |
- |          v                                                                               |
- |   [ Token Minting Engine ] (DET Issuer - PASETO)                                            |
- |                                                                                          |
- .==========================================================================================.
-        |
-        +----------------------+ 4. "Call the weather node on my behalf. Give them this ticket"
-                               |    Return Physical Route + DET PASETO signed by the Gateway
-                               |
-                               | 5. DIRECT P2P INVOCATION (mTLS + DET) - No Broker Intermediation
-                               |    "Hey, BFA gave me this ticket to query you..."
-                               v
-  +------------------------------------------------------------------------------------------+
-  | EXECUTION LAYER & DATA SANDBOX (FastMCP Tool Servers - Outside BFA)                      |
-  |                                                                                          |
-  |   [ FastMCP Server ] (Offline DET Validation / Secrets Vault with HashiCorp Vault)        |
-  +------------------------------------------------------------------------------------------+
-                               |
-                               | 6. EXCLUSIVE BACKEND CONNECTION (The only physical path to DB)
-                               v
-                  +--------------------------+
-                  | Core DB / Banking API    | (External Corporate Backend)
-                  +--------------------------+
+  +-----------------------------------------------------------------------------------------+
+  | COGNITIVE REASONING LAYER (Stateless Agents - Sandbox Environment)                      |
+  |                                                                                         |
+  |   [ Agente Nodo A ] <============ Inter-Agent A2A Protocol ============> [ Agente B ]   |
+  |      (BaseAgent)                                                           (BaseAgent)  |
+  |           |                                                                             |
+  |           | FastMCP (mTLS)                                                              |
+  |           v                                                                             |
+  |     [ MCP Tools ] (BaseMCP) --------------------------------+                           |
+  +-----------|-------------------------------------------------|---------------------------+
+              | 1. Register Node                                |
+              | 2. Discover Skill                               |
+              v                                                 |
+  +-----------|-------------------------------------------------|---------------------------+
+  | SUPPORT & SEMANTIC ROUTING LAYER (BFA Gateway Registry)     |                           |
+  |                                                             |                           |
+  |   [ BFA Core Broker ] (Stateless Router)                    |                           |
+  |           |                                                 |                           |
+  |           | 3. Semantic Search with Masking                 |                           |
+  |           v                                                 |                           |
+  |     [ FAISS Index ] (Intent Mapping)                        |                           |
+  |           |                                                 |                           |
+  |           | 4. Match Skill & Generate DET                   |                           |
+  |           v                                                 |                           |
+  |   [ Token Minting Engine ] (DET Issuer - PASETO)            |                           |
+  |           |                                                 |                           |
+  |           +========== 5. Return Route + Ephemeral DET =======+                           |
+  +-----------------------------------------------------------------------------------------+
+                                                                |
+                                                                | 6. Exclusive Data Connection
+                                                                v
+                                                    +-----------------------+
+                                                    | EXECUTION & DATA      |
+                                                    | [Core Apps, APIs, DB] |
+                                                    +-----------------------+
 ```
 
 ### 4.2 The Semantic Discovery Gateway (FAISS Index)
