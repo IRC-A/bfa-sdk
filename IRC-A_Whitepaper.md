@@ -96,13 +96,13 @@ The IRC-A topology strictly divides responsibilities into decoupled physical and
 ```mermaid
 graph TB
     %% Style Definitions
-    classDef CognitiveLayer fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px,font-weight:bold;
-    classDef GatewayLayer fill:#f8cecc,stroke:#b85450,stroke-width:2px,font-weight:bold;
-    classDef FAISSLayer fill:#fff2cc,stroke:#d6b656,stroke-width:2px,font-weight:bold;
-    classDef TokenLayer fill:#e1d5e7,stroke:#9673a6,stroke-width:2px,font-weight:bold;
-    classDef ExecutionLayer fill:#d5e8d4,stroke:#82b366,stroke-width:2px,font-weight:bold;
-    classDef DBLayer fill:#ffe6cc,stroke:#d79b00,stroke-width:2px,font-weight:bold;
-    classDef Subgraphs fill:#f5f5f5,stroke:#666666,stroke-width:2px,font-weight:bold;
+    classDef CognitiveLayer fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px,font-weight:bold,color:#000000;
+    classDef GatewayLayer fill:#f8cecc,stroke:#b85450,stroke-width:2px,font-weight:bold,color:#000000;
+    classDef FAISSLayer fill:#fff2cc,stroke:#d6b656,stroke-width:2px,font-weight:bold,color:#000000;
+    classDef TokenLayer fill:#e1d5e7,stroke:#9673a6,stroke-width:2px,font-weight:bold,color:#000000;
+    classDef ExecutionLayer fill:#d5e8d4,stroke:#82b366,stroke-width:2px,font-weight:bold,color:#000000;
+    classDef DBLayer fill:#ffe6cc,stroke:#d79b00,stroke-width:2px,font-weight:bold,color:#000000;
+    classDef Subgraphs fill:#f5f5f5,stroke:#666666,stroke-width:2px,font-weight:bold,color:#000000;
 
     %% Layer 1: Cognitive Reasoning Layer
     subgraph Layer1 [COGNITIVE REASONING LAYER - Stateless Agents]
