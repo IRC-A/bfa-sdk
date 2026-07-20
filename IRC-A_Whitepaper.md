@@ -252,15 +252,10 @@ def fetch_customer_credit_score(
     return {"customer_id": customer_id, "score": 750, "risk_level": "low"}
 ```
 
-### 4.5 Read-Only Administrative Control Panel (Registry Hub)
-To facilitate operational monitoring and auditing in complex enterprise environments, the IRC-A architecture incorporates a centralized, read-only administrative Control Panel. 
-
-This UI acts as a passive registry visualizer, providing administrators with:
-*   **Active Nodes Directory:** Real-time visibility into all active `BFAAgent` and `BFAMCP` server instances currently registered with the BFA Gateway.
-*   **Logical Channel Topology:** Visual tracking of channel configurations (e.g., `#credit-audit`, `#public`) to audit boundary compliance and potential path exposures.
-*   **Capability Mappings:** Interactive inspection of registered tools, parameters, descriptions, and similarity tags.
-
-To prevent privilege escalation and maintain strict corporate governance, the Control Panel intentionally lacks any interactive registration form or modification UI. Node registration is strictly programmatic—handled via secure SDK bootstrapping or authenticated API calls (e.g., signed cURL commands), aligning the system lifecycle with standard DevOps gitops/deployment pipelines.
+### 4.5 Passive Observability and Auditing Layer
+In complex, dynamically bound enterprise environments, runtime visibility and auditing are critical. However, to prevent privilege escalation and maintain strict zero-trust boundaries, the observability layer in IRC-A is designed around two core architectural constraints:
+*   **Passive Read-Only State Observation:** The BFA Gateway exposes a stateless metadata endpoint that enables passive monitoring of the network topology. This provides administrators and auditing tools with complete visibility into registered capabilities, active node identities, and logical channel configurations without introducing paths for mutation.
+*   **Decoupled Registry Modification:** The observability layer is strictly non-interactive. Nodes register and disconnect solely through authenticated, programmatic SDK handshakes or signed gateway API calls. By preventing manual state modification via operational dashboards, the topology lifecycle remains aligned with automated infrastructure pipelines (GitOps/DevOps) and avoids creating backdoors for unauthorized privilege modification.
 
 ---
 
