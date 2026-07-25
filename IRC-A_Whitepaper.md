@@ -517,6 +517,10 @@ Let's review the secure architectural lifecycle of a mortgage application proces
 ## 10. Conclusion and Future Roadmap
 The IRC-A architecture demonstrates that the challenges of implementing generative AI inside enterprise environments are not solved by developing larger models or writing longer prompts, but by applying rigorous software engineering. By returning to Smalltalk's principles of messaging and isolated responsibilities, using decentralized capability pooling, and encapsulating zero-trust authorization in a base SDK class (`BFAAgent`) via Ephemeral Delegated Execution Tokens (DET), we can build agentic networks that are robust, secure, and ready for high-compliance production workloads.
 
+To align with this, the BFA-SDK is distributed under a **Dual-License Model**:
+*   **Open-Source Community Edition (AGPLv3):** Exposes 100% of the core security features—including token minting, parameter lockdowns, and prompt-hash verification—guaranteeing that secure-by-default computing remains an open, un-gatekept standard.
+*   **Commercial Enterprise Edition:** Licenses production-scale operational governance, real-time observability dashboards, and compliance SIEM audit pipelines. For details, refer to the [Licensing & Feature Matrix](file:///Users/sandrogarcia/GitRespos/Backend%20for%20Agents%20SDK/LICENSE_MATRIX.md).
+
 Our engineering roadmap for the BFA-SDK focuses on:
 1.  **Unified Telemetry Middlewares:** Tracking latency, TTFT, and transaction success rates across FAISS-registered nodes.
 2.  **Edge Embedding Optimization:** Integrating local, optimized, and hardware-accelerated embedding transformers directly into the BFA Core Gateway.
