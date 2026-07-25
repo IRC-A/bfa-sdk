@@ -185,7 +185,7 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
     Query A2A endpoints to obtain card and skill registrations.
     """
     registry = {}
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for url in endpoints:
             try:
                 resolver = A2ACardResolver(
@@ -212,7 +212,7 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
     Query MCP endpoints to extract metadata schemas.
     """
     registry = {}
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for url in endpoints:
             try:
                 response = await client.get(f"{url}/tools")
@@ -354,6 +354,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
     def register_init(payload: Dict[str, Any]):
         node_id = payload.get("node_id")
         channels = payload.get("channels", ["#public"])
+        prompt_hash = payload.get("prompt_hash")
         if not node_id:
             raise HTTPException(status_code=400, detail="Missing node_id")
             
@@ -361,7 +362,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         CHALLENGES[node_id] = challenge_bytes
         REGISTERED_NODES[node_id] = {
             "channels": channels,
-            "public_key": None
+            "public_key": None,
+            "prompt_hash": prompt_hash
         }
         add_system_log("REGISTRATION", node_id, "Initiated challenge-response handshake.")
         return {"challenge_bytes": challenge_bytes}
@@ -371,6 +373,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         node_id = payload.get("node_id")
         signature_hex = payload.get("signature")
         public_key_pem = payload.get("public_key")
+        prompt_hash = payload.get("prompt_hash")
         
         if not node_id or not signature_hex or not public_key_pem:
             raise HTTPException(status_code=400, detail="Missing required parameters")
@@ -394,6 +397,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=f"Failed to verify signature: {e}")
             
         REGISTERED_NODES[node_id]["public_key"] = pubkey
+        if prompt_hash:
+            REGISTERED_NODES[node_id]["prompt_hash"] = prompt_hash
         del CHALLENGES[node_id]
         
         expiry = int(time.time()) + 3600
@@ -495,19 +500,28 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 if match:
                     restricted_params[param_name] = match.group(1)
             
+        # Retrieve prompt_hash if registered for target node
+        target_prompt_hash = REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash")
+        if not target_prompt_hash:
+            target_prompt_hash = best["data"].get("prompt_hash")
+
         import uuid
         det_expiry = int(time.time()) + 60
+        det_claims = {
+            "jti": str(uuid.uuid4()),
+            "iss": "irca-gateway",
+            "sub": caller_id,
+            "aud": target_node_id,
+            "permitted_action": best["data"]["name"],
+            "restricted_params": restricted_params,
+            "exp": det_expiry,
+            "iat": int(time.time())
+        }
+        if target_prompt_hash:
+            det_claims["expected_prompt_hash"] = target_prompt_hash
+
         det = sign_paseto_v4_public(
-            {
-                "jti": str(uuid.uuid4()),
-                "iss": "irca-gateway",
-                "sub": caller_id,
-                "aud": target_node_id,
-                "permitted_action": best["data"]["name"],
-                "restricted_params": restricted_params,
-                "exp": det_expiry,
-                "iat": int(time.time())
-            },
+            det_claims,
             GATEWAY_PRIVATE_KEY
         )
         
@@ -532,26 +546,38 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         restricted_params = payload.get("restricted_params", {})
         if not target_node_id or not permitted_action:
             raise HTTPException(status_code=400, detail="Missing target_node_id or permitted_action")
+        # Look up prompt_hash for target_node_id
+        target_prompt_hash = payload.get("prompt_hash") or REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash")
+        if not target_prompt_hash and ROUTER:
+            for existing_item in ROUTER.registry.values():
+                if existing_item.get("node_id") == target_node_id or existing_item.get("skill") == target_node_id:
+                    target_prompt_hash = existing_item.get("prompt_hash")
+                    break
+
         import uuid
         det_expiry = int(time.time()) + 3600
+        det_claims = {
+            "jti": str(uuid.uuid4()),
+            "iss": "irca-gateway-admin",
+            "sub": "gateway-admin",
+            "aud": target_node_id,
+            "permitted_action": permitted_action,
+            "restricted_params": restricted_params,
+            "exp": det_expiry,
+            "iat": int(time.time())
+        }
+        if target_prompt_hash:
+            det_claims["expected_prompt_hash"] = target_prompt_hash
+
         det = sign_paseto_v4_public(
-            {
-                "jti": str(uuid.uuid4()),
-                "iss": "irca-gateway-admin",
-                "sub": "gateway-admin",
-                "aud": target_node_id,
-                "permitted_action": permitted_action,
-                "restricted_params": restricted_params,
-                "exp": det_expiry,
-                "iat": int(time.time())
-            },
+            det_claims,
             GATEWAY_PRIVATE_KEY
         )
         add_system_log("SYSTEM", "Gateway", f"Manually minted DET token for target '{target_node_id}', action '{permitted_action}'")
         return {"det": det}
 
     @app.post("/register/agent")
-    async def register_agent(url: str, channels: str = "#public", node_id: str = None, payload: Dict[str, Any] = None):
+    async def register_agent(url: str, channels: str = "#public", node_id: str = None, prompt_hash: str = None, payload: Dict[str, Any] = None):
         """
         Dynamically register a new A2A Agent URL in runtime, index it in FAISS, and persist it.
         """
@@ -563,10 +589,17 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for Agent at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover agent at {url}")
             
+        # Extract prompt_hash from payload if present
+        actual_prompt_hash = prompt_hash
+        if not actual_prompt_hash and payload:
+            actual_prompt_hash = payload.get("prompt_hash")
+
         channel_list = [ch.strip() for ch in channels.split(",") if ch.strip()]
         for skill_id in new_agents:
             new_agents[skill_id]["channels"] = channel_list
             new_agents[skill_id]["node_id"] = node_id or skill_id
+            if actual_prompt_hash:
+                new_agents[skill_id]["prompt_hash"] = actual_prompt_hash
             if payload and "precomputed_embeddings" in payload:
                 pre_embs = payload["precomputed_embeddings"]
                 if skill_id in pre_embs:
@@ -691,7 +724,33 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="No matching agent found above threshold.")
             
         agent_url = best["data"]["url"]
+        target_node_id = best.get("skill") or best.get("data", {}).get("node_id") or "agent"
         
+        # Retrieve prompt_hash if registered for target node
+        target_prompt_hash = REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash")
+        if not target_prompt_hash:
+            target_prompt_hash = best["data"].get("prompt_hash")
+
+        import uuid
+        det_expiry = int(time.time()) + 3600
+        det_claims = {
+            "jti": str(uuid.uuid4()),
+            "iss": "irca-gateway",
+            "sub": "gateway-broker",
+            "aud": target_node_id,
+            "permitted_action": "SendMessage",
+            "restricted_params": {},
+            "exp": det_expiry,
+            "iat": int(time.time())
+        }
+        if target_prompt_hash:
+            det_claims["expected_prompt_hash"] = target_prompt_hash
+
+        det = sign_paseto_v4_public(
+            det_claims,
+            GATEWAY_PRIVATE_KEY
+        )
+
         # 1. Translate the incoming payload to A2A SendMessage format
         a2a_payload = {
             "jsonrpc": "2.0",
@@ -711,16 +770,23 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "id": payload.get("id", 1) if payload else 1
         }
         
-        # 2. Forward request to A2A Agent with required version headers
-        async with httpx.AsyncClient() as client:
+        # Add system log for Observability Console
+        add_system_log("DISCOVERY", target_node_id, f"Resolved query '{query}' -> target '{target_node_id}' ({agent_url}). Mints DET token.")
+
+        # 2. Forward request to A2A Agent with required DET and version headers
+        async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 response = await client.post(
                     agent_url, 
                     json=a2a_payload,
-                    headers={"A2A-Version": "1.0"}
+                    headers={
+                        "A2A-Version": "1.0",
+                        "x-det": det
+                    }
                 )
                 response_json = response.json()
             except Exception as e:
+                add_system_log("ERROR", target_node_id, f"Execution failed for query '{query}': {e}")
                 raise HTTPException(
                     status_code=502, 
                     detail=f"Failed to forward request to Agent at {agent_url}: {e}"

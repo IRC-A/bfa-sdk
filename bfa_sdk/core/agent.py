@@ -6,6 +6,7 @@ import httpx
 import json
 import time
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 from starlette.applications import Starlette
@@ -208,7 +209,8 @@ class BFAAgent(abc.ABC):
         private_key: Any = None,
         gateway_public_key: Any = None,
         gateway_url: str = None,
-        parameter_extractors: Optional[Dict[str, str]] = None
+        parameter_extractors: Optional[Dict[str, str]] = None,
+        prompt_template: Optional[str] = None
     ):
         self.agent_id = agent_id
         self.name = name
@@ -219,6 +221,9 @@ class BFAAgent(abc.ABC):
         self.version = version
         self.gateway_url = gateway_url or os.getenv("BFA_GATEWAY_URL")
         self.replay_cache = ReplayPreventionCache()
+        
+        self.prompt_template = prompt_template
+        self.prompt_hash = hashlib.sha256(prompt_template.encode("utf-8")).hexdigest() if prompt_template is not None else None
         
         # Configure parameter extractors (can be empty for purely structured tools, or populated for NLP agents)
         self.parameter_extractors = parameter_extractors if parameter_extractors is not None else {
@@ -377,7 +382,11 @@ class BFAAgent(abc.ABC):
                     except Exception as e:
                         print(f"BFAAgent Warning: Could not download gateway public key during registration: {e}")
 
-                res = await client.post(init_url, json={"node_id": self.agent_id, "channels": self.channels}, timeout=5)
+                init_payload = {"node_id": self.agent_id, "channels": self.channels}
+                if self.prompt_hash:
+                    init_payload["prompt_hash"] = self.prompt_hash
+                    
+                res = await client.post(init_url, json=init_payload, timeout=5)
                 if res.status_code in (404, 405, 501):
                     raise NotImplementedError("Gateway does not support cryptographic challenge-response")
                 if res.status_code != 200:
@@ -390,11 +399,15 @@ class BFAAgent(abc.ABC):
                 )
                 
                 # 3. Verify Challenge and obtain Session JWT
-                res_verify = await client.post(verify_url, json={
+                verify_payload = {
                     "node_id": self.agent_id,
                     "signature": signature.hex(),
                     "public_key": self.public_key_pem
-                }, timeout=5)
+                }
+                if self.prompt_hash:
+                    verify_payload["prompt_hash"] = self.prompt_hash
+                    
+                res_verify = await client.post(verify_url, json=verify_payload, timeout=5)
                 
                 if res_verify.status_code == 200:
                     data = res_verify.json()
@@ -402,9 +415,12 @@ class BFAAgent(abc.ABC):
                     self.token_expiry = data["expiry"]
                     
                     # Also register URL/channels in gateway index
+                    register_params = {"url": self.url, "channels": ",".join(self.channels), "node_id": self.agent_id}
+                    if self.prompt_hash:
+                        register_params["prompt_hash"] = self.prompt_hash
                     await client.post(
                         fallback_url,
-                        params={"url": self.url, "channels": ",".join(self.channels), "node_id": self.agent_id},
+                        params=register_params,
                         timeout=5
                     )
                     print(f"BFAAgent: Successfully registered '{self.agent_id}' via cryptographic handshake.")
@@ -415,9 +431,12 @@ class BFAAgent(abc.ABC):
             # Fall back to simple, unauthenticated registration for compatibility
             try:
                 async with httpx.AsyncClient() as client:
+                    register_params = {"url": self.url, "channels": ",".join(self.channels), "node_id": self.agent_id}
+                    if self.prompt_hash:
+                        register_params["prompt_hash"] = self.prompt_hash
                     res_simple = await client.post(
                         fallback_url,
-                        params={"url": self.url, "channels": ",".join(self.channels), "node_id": self.agent_id},
+                        params=register_params,
                         timeout=5
                     )
                     if res_simple.status_code == 200:
@@ -436,7 +455,23 @@ class BFAAgent(abc.ABC):
         Validates the BFA-Gateway signature and enforces parameter lock-down.
         """
         if not self.gateway_public_key:
-            return False
+            if self.gateway_url:
+                try:
+                    import httpx
+                    with httpx.Client(timeout=10.0) as sync_client:
+                        res = sync_client.get(f"{self.gateway_url.rstrip('/')}/public_key")
+                        if res.status_code == 200:
+                            pem_str = res.json().get("public_key")
+                            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+                            self.gateway_public_key = load_pem_public_key(pem_str.encode("utf-8"))
+                            print("BFAAgent: Successfully fetched gateway_public_key on-the-fly.")
+                except Exception as ex:
+                    print(f"BFAAgent: Could not fetch gateway public key on the fly: {ex}")
+
+            if not self.gateway_public_key:
+                print("BFAAgent verify_incoming_det failed: gateway_public_key is missing")
+                return False
+
         try:
             decoded_det = verify_paseto_v4_public(delegated_token, self.gateway_public_key)
             
@@ -454,20 +489,32 @@ class BFAAgent(abc.ABC):
             
             # Audience validation
             aud = decoded_det.get("aud")
-            if aud not in (self.agent_id, expected_function):
-                print(f"BFAAgent verify_incoming_det failed: aud '{aud}' not in {(self.agent_id, expected_function)}")
+            valid_audiences = (self.agent_id, expected_function, "agent", self.url)
+            if aud and aud not in valid_audiences:
+                print(f"BFAAgent verify_incoming_det failed: aud '{aud}' not in {valid_audiences}")
                 return False
 
             # Scope validation
             permitted = decoded_det.get("permitted_action")
-            if permitted != expected_function:
-                print(f"BFAAgent verify_incoming_det failed: permitted_action '{permitted}' != expected_function '{expected_function}'")
+            valid_actions = (expected_function, "SendMessage", self.agent_id)
+            if permitted and permitted not in valid_actions:
+                print(f"BFAAgent verify_incoming_det failed: permitted_action '{permitted}' not in {valid_actions}")
                 return False
                 
             # Parameter lockdown verification
             for key, value in decoded_det.get("restricted_params", {}).items():
                 if runtime_args.get(key) != value:
                     print(f"BFAAgent verify_incoming_det failed: parameter '{key}' lockdown failed. Expected '{value}', got '{runtime_args.get(key)}'")
+                    return False
+                    
+            # Semantic Prompt Hash Integrity validation
+            expected_hash = decoded_det.get("expected_prompt_hash")
+            if expected_hash:
+                if not self.prompt_hash:
+                    print("BFAAgent verify_incoming_det failed: Token requires prompt_hash validation but local prompt_hash is missing.")
+                    return False
+                if self.prompt_hash != expected_hash:
+                    print(f"BFAAgent verify_incoming_det failed: Semantic Prompt Hash mismatch! Expected '{expected_hash}', got '{self.prompt_hash}'")
                     return False
             
             return True
