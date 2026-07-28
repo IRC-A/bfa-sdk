@@ -1,22 +1,21 @@
-name: Publish Python Package to PyPI
+name: Publish Python Package to PyPI and GitHub
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   release:
     types: [published]
-  push:
-    tags:
-      - 'v*'
-
-permissions:
-  contents: read
 
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     permissions:
-      # This permission is required for Trusted Publishing (OIDC)
       id-token: write
-      contents: read
+      contents: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -26,6 +25,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Auto-bump version (Push/PR)
+        if: github.event_name != 'release'
+        run: |
+          BASE_VERSION=$(grep -E '^version = ' pyproject.toml | awk -F '"' '{print $2}')
+          NEW_VERSION="${BASE_VERSION}.dev${{ github.run_number }}"
+          sed -i "s/version = \"$BASE_VERSION\"/version = \"$NEW_VERSION\"/" pyproject.toml
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
@@ -34,5 +41,16 @@ jobs:
       - name: Build Package
         run: python -m build
 
+      - name: Create GitHub Release
+        if: github.event_name != 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ env.NEW_VERSION }}"
+          name: "Release v${{ env.NEW_VERSION }}"
+          prerelease: ${{ github.event_name == 'pull_request' }}
+          generate_release_notes: true
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
