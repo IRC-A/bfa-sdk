@@ -79,6 +79,85 @@ irc-a-gateway
 
 ---
 
+## Guia Rápido (Quickstart)
+
+Vamos construir sua primeira rede BFA em 3 minutos!
+
+### 1. Inicie o Gateway
+Primeiro, certifique-se de iniciar o Gateway (o roteador semântico central) no seu terminal:
+```bash
+irc-a-gateway
+```
+*O Gateway começará a ouvir em `http://127.0.0.1:8000`.*
+
+### 2. Seu primeiro Agente (A2A)
+Crie um arquivo chamado `meu_agente.py`, cole este código e execute-o com `python meu_agente.py`:
+
+```python
+import uvicorn
+from bfa_sdk.core.agent import BFAAgent
+from a2a.server.agent_execution.context import RequestContext
+
+class AgenteClima(BFAAgent):
+    def __init__(self):
+        super().__init__(
+            agent_id="clima_agent",
+            name="Agente do Clima",
+            description="Agente especialista em meteorologia e clima.",
+            tags=["clima", "tempo", "temperatura", "chuva"],
+            examples=["vai chover hoje?", "qual é a temperatura?"],
+            url="http://127.0.0.1:8002",
+            gateway_url="http://127.0.0.1:8000"
+        )
+
+    async def run(self, user_message: str, context: RequestContext) -> str:
+        # Aqui você pode conectar um LLM real (OpenAI, Anthropic, etc.)
+        return f"Recebi sua consulta sobre o clima: '{user_message}'. Hoje faz um dia lindo!"
+
+agent = AgenteClima()
+app = agent.app
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8002)
+```
+
+### 3. Seu primeiro Servidor de Ferramentas (MCP)
+Crie um arquivo chamado `meu_mcp.py`, cole este código e execute-o com `python meu_mcp.py`:
+
+```python
+import uvicorn
+import asyncio
+import threading
+from bfa_sdk.core.mcp import BFAMCP
+
+mcp = BFAMCP("Ferramentas do Clima")
+
+@mcp.tool(
+    name="obter_temperatura",
+    description="Retorna a temperatura de uma cidade.",
+    tags=["temperatura", "graus", "cidade"],
+    examples=["temperatura em madrid", "graus em lima"]
+)
+async def obter_temperatura(ciudad: str) -> str:
+    return f"A temperatura em {ciudad} é de 24°C."
+
+# Auto-registro no Gateway
+async def startup():
+    await asyncio.sleep(1)
+    await mcp.register_with_gateway("http://127.0.0.1:8000", "http://127.0.0.1:8003")
+
+threading.Thread(target=lambda: asyncio.run(startup()), daemon=True).start()
+
+app = mcp.app
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8003)
+```
+
+Pronto! Você agora tem um Gateway, um Agente e um Servidor MCP conectados semanticamente e protegidos por tokens DET.
+
+---
+
 ## Implantação com Docker (Contêiner do Gateway BFA)
 
 Você pode executar o Gateway BFA (incluindo seu roteador de busca semântica vetorial e o painel de controle interativo em modo escuro) como um microsserviço conteinerizado usando o Docker ou Docker Compose.
