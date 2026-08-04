@@ -5,7 +5,8 @@ from bfa_sdk.core.mcp import BFAMCP
 
 # Configure environmental options for FAISS local embeddings or mock embeddings
 os.environ["IRCA_CHANNELS"] = "#finance"
-os.environ["BFA_GATEWAY_URL"] = "http://localhost:8000"
+gateway_url = os.getenv("BFA_GATEWAY_URL", "http://127.0.0.1:18000")
+mcp_public_url = os.getenv("PUBLIC_URL", os.getenv("MCP_URL", "http://127.0.0.1:18002"))
 
 mcp_server = BFAMCP("bank-database-mcp")
 
@@ -25,7 +26,7 @@ def get_bank_score(delegated_token: str, customer_id: str) -> str:
 # Start registration helper on startup asynchronously
 async def startup_register():
     await asyncio.sleep(1)  # Wait for gateway to boot
-    await mcp_server.register_with_gateway("http://localhost:8000", "http://localhost:8002")
+    await mcp_server.register_with_gateway(gateway_url, mcp_public_url)
 
 # Spawn background register task
 import threading
@@ -35,4 +36,6 @@ threading.Thread(target=lambda: loop.run_until_complete(startup_register()), dae
 app = mcp_server.app
 
 if __name__ == "__main__":
-    uvicorn.run("mcp_server:app", host="127.0.0.1", port=8002, log_level="warning")
+    bind_host = os.getenv("HOST", "0.0.0.0")
+    bind_port = int(os.getenv("PORT", 18002))
+    uvicorn.run("mcp_server:app", host=bind_host, port=bind_port, log_level="warning")

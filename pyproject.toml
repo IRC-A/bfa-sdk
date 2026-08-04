@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bfa-irc-a-sdk"
-version = "0.2.0"
+version = "0.3.0"
 description = "A generic Backend for Agents (BFA) SDK with FAISS semantic routing."
 readme = "README.md"
 authors = [

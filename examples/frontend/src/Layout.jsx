@@ -15,17 +15,20 @@ export default function AppLayout({ children }) {
                 Chat
                 </Link>
                 <Link to="/state-util" className="text-sm hover:underline font-medium">
-                Visualizador
+                Visualizer
                 </Link>
                 <Link to="/registry" className="text-sm hover:underline font-medium text-blue-400">
-                🔌 Servidores (IRC-A)
+                🔌 Registry (IRC-A)
+                </Link>
+                <Link to="/logs" className="text-sm hover:underline font-medium text-teal-400">
+                📊 Observability
                 </Link>
             </nav>
             <button
                 className="text-sm px-2 py-1 bg-gray-700 rounded hover:bg-gray-600"
                 onClick={() => setStateVisible(!stateVisible)}
             >
-                {stateVisible ? "Fechar State" : "Abrir State"}
+                {stateVisible ? "Hide State" : "Show State"}
             </button>
             </div>
         </header>
@@ -37,7 +40,7 @@ export default function AppLayout({ children }) {
             {/* STATE PANEL */}
             {stateVisible && (
             <aside className="w-80 bg-gray-800 border-l border-gray-700 p-4 flex flex-col gap-2 overflow-y-auto transition-all duration-300">
-                <h2 className="font-bold text-lg mb-2">📊 State Compartilhado</h2>
+                <h2 className="font-bold text-lg mb-2">📊 Shared State</h2>
                 <pre className="text-sm bg-gray-900 p-2 rounded flex-1 overflow-auto">
                 {JSON.stringify(state, null, 2)}
                 </pre>

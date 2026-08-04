@@ -90,12 +90,12 @@ export default function StateUtilPage() {
         <AppLayout>
         <div className="p-6 flex-1 overflow-auto flex flex-col gap-6 bg-gray-900">
             <h1 className="text-3xl font-bold mb-6 text-white">
-            📋 Histórico de Respostas
+            📋 Response History
             </h1>
 
             {filteredResponses.length === 0 ? (
             <p className="text-gray-400 text-lg">
-                Nenhuma resposta registrada ainda.
+                No responses recorded yet.
             </p>
             ) : (
             <div className="flex flex-col gap-4">
@@ -119,7 +119,7 @@ export default function StateUtilPage() {
                             : "bg-gray-700 self-start"
                         } hover:scale-[1.02] transition-transform duration-200`}
                         title={
-                        data ? "Informação registrada" : "Mensagem do sistema"
+                        data ? "Recorded information" : "System message"
                         }
                     >
                         <ReactMarkdown
@@ -145,7 +145,7 @@ export default function StateUtilPage() {
                                 </div>
                                 {data.CartaoLimite && (
                                     <div className="flex justify-between text-sm opacity-90 text-white">
-                                    <span>Limite</span>
+                                    <span>Limit</span>
                                     <span>{data.CartaoLimite}</span>
                                     </div>
                                 )}

@@ -54,7 +54,7 @@ export default function ChatBox({ messages, setMessages, onSend, loading }) {
     </div>
     ))}
 
-        {loading && <div className="text-gray-400">Pensando...</div>}
+        {loading && <div className="text-gray-400 animate-pulse">Processing request...</div>}
 
         <div ref={endRef} /></div>
 
@@ -63,7 +63,8 @@ export default function ChatBox({ messages, setMessages, onSend, loading }) {
         <textarea
         value={input}
         onChange={(e) => setInput(e.target.value)}
-        className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2"
+        placeholder="Type a message or banking request..."
+        className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-blue-500"
         onKeyDown={(e) => {
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
@@ -77,9 +78,9 @@ export default function ChatBox({ messages, setMessages, onSend, loading }) {
                 onSend(input);
                 setInput("");
             }}
-            className="bg-blue-600 px-4 rounded-xl"
+            className="bg-blue-600 px-4 rounded-xl text-white font-medium hover:bg-blue-500 transition-colors"
             >
-            Enviar
+            Send
         </button>
     </div>
 </div>

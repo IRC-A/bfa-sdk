@@ -28,7 +28,7 @@ class BFASemanticRouter:
         """
         import faiss
         
-        self.index_keys = []
+        new_index_keys = []
         texts_to_embed = []
         keys_to_embed = []
         precomputed_embeddings = {}
@@ -36,7 +36,7 @@ class BFASemanticRouter:
         for skill_id, item in self.registry.items():
             if "precomputed_embedding" in item and item["precomputed_embedding"] is not None:
                 precomputed_embeddings[skill_id] = item["precomputed_embedding"]
-                self.index_keys.append(skill_id)
+                new_index_keys.append(skill_id)
             else:
                 tags_str = " ".join(item.get("tags", []))
                 examples_str = " ".join(item.get("examples", []))
@@ -58,21 +58,26 @@ class BFASemanticRouter:
         # First add the ones that were generated
         for key, emb in zip(keys_to_embed, generated_embeddings):
             all_embeddings.append(emb)
-            self.index_keys.append(key)
+            new_index_keys.append(key)
         # Next add the pre-computed ones
         for key in precomputed_embeddings:
             all_embeddings.append(precomputed_embeddings[key])
 
         if not all_embeddings:
             self.index = None
+            self.index_keys = []
             return
 
         embeddings_np = np.array(all_embeddings).astype("float32")
         dimension = embeddings_np.shape[1]
         
         # L2 Distance Indexing
-        self.index = faiss.IndexFlatL2(dimension)
-        self.index.add(embeddings_np)
+        new_index = faiss.IndexFlatL2(dimension)
+        new_index.add(embeddings_np)
+        
+        # Atomic assignment to prevent race conditions during concurrent requests
+        self.index = new_index
+        self.index_keys = new_index_keys
 
     def resolve(
         self, 
@@ -80,11 +85,13 @@ class BFASemanticRouter:
         top_k: int = 3, 
         threshold: float = 0.3, 
         filter_type: Optional[str] = None,
-        agent_channels: Optional[List[str]] = None
+        agent_channels: Optional[List[str]] = None,
+        exclude_node_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Resolves the query to the best matching agent or tool from FAISS index.
         Normalizes L2 distance to a 0.0 - 1.0 confidence score.
+        Supports exclude_node_id to bypass self-referential matches.
         """
         if self.index is None or not self.index_keys:
             return {"type": "no_match", "best": None, "candidates": []}
@@ -93,10 +100,11 @@ class BFASemanticRouter:
         query_vector = self.embedder.embed_query(query)
         query_vector_np = np.array([query_vector]).astype("float32")
 
-        # Search index
-        # Limit search to actual registered item count if smaller than top_k
-        actual_k = min(top_k, len(self.index_keys))
-        distances, indices = self.index.search(query_vector_np, len(self.index_keys))
+        # Search index - fetch extra candidates to account for exclusions
+        search_k = min(top_k + 5, len(self.index_keys))
+        if search_k <= 0:
+            return {"type": "no_match", "best": None, "candidates": []}
+        distances, indices = self.index.search(query_vector_np, search_k)
 
         candidates = []
         for dist, idx in zip(distances[0], indices[0]):
@@ -105,6 +113,16 @@ class BFASemanticRouter:
                 
             skill_id = self.index_keys[idx]
             item = self.registry[skill_id]
+
+            # Filter out self-referential calling node if exclude_node_id is provided
+            if exclude_node_id:
+                target_node_id = str(item.get("node_id") or "").strip().lower()
+                target_url = str(item.get("url") or item.get("server_url") or "").strip().lower()
+                ex_clean = str(exclude_node_id).strip().lower()
+                if (ex_clean == str(skill_id).strip().lower() or
+                    ex_clean == target_node_id or
+                    (ex_clean and ex_clean in target_url)):
+                    continue
 
             # Filter by type if requested
             if filter_type and item.get("type") != filter_type:
@@ -117,7 +135,6 @@ class BFASemanticRouter:
                     continue
 
             # Convert L2 distance squared to Cosine Similarity in [0.0, 1.0] range
-            # Assuming unit-normalized vectors: CosSim = 1.0 - (L2_dist_squared / 4.0)
             similarity = float(1.0 - (dist / 4.0))
             similarity = max(0.0, min(1.0, similarity))
 

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "commonjs",
+    "lib": ["es2021"],
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "nodes/**/*",
+    "credentials/**/*",
+    "index.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

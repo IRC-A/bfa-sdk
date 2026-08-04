@@ -2,6 +2,7 @@ import { useAppState } from "./StateContext";
 import AppLayout from "./Layout";
 import ChatBox from "./components/ChatBox";
 import PromptSuggestions from "./components/PromptSuggestions";
+import { GATEWAY_URL } from "./config";
 
 export default function ChatPage() {
     const { messages, setMessages, loading, setLoading, updateState, state } =
@@ -26,23 +27,8 @@ export default function ChatPage() {
         }
 
         try {
-            // 1. Fetch FAISS Semantic Routing Resolution info (in parallel)
-            let routingTag = "";
-            try {
-                const resolveRes = await fetch(`http://localhost:8000/resolve?query=${encodeURIComponent(message)}`);
-                if (resolveRes.ok) {
-                    const resolveData = await resolveRes.json();
-                    const best = resolveData.best;
-                    if (best) {
-                        routingTag = `\n\n---\n*🔌 Enrutado semánticamente por **IRC-A** a **${best.skill}** (${best.type === 'agent' ? 'Agente A2A' : 'MCP Tool'}) con **${(best.confidence * 100).toFixed(1)}%** de confianza.*`;
-                    }
-                }
-            } catch (err) {
-                console.warn("Could not fetch routing resolution info:", err);
-            }
-
-            // 2. Invoke the routed microservice via BFA Gateway
-            const response = await fetch(`http://localhost:8000/invoke?query=${encodeURIComponent(message)}`, {
+            // Invoke the routed microservice via BFA Gateway
+            const response = await fetch(`${GATEWAY_URL}/invoke?query=${encodeURIComponent(message)}`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -68,12 +54,11 @@ export default function ChatPage() {
             // Extract response text from A2A JSON-RPC format
             let textResponse = "";
             if (data.error) {
-                textResponse = `⚠️ **Error del Agente (${data.error.code}):** ${data.error.message}`;
+                textResponse = `⚠️ **Agent Error (${data.error.code}):** ${data.error.message}`;
             } else {
-                textResponse = data?.result?.output?.text || "Sin respuesta estructurada del agente.";
+                textResponse = data?.result?.output?.text || "No structured response received from agent.";
             }
 
-            const finalMessage = textResponse + routingTag;
             const assistantId = crypto.randomUUID();
 
             setMessages((prev) => [
@@ -81,23 +66,23 @@ export default function ChatPage() {
                 {
                     id: assistantId,
                     role: "assistant",
-                    content: finalMessage,
+                    content: textResponse,
                 },
             ]);
 
-            // Actualizamos las respuestas del estado compartido para que el visualizador de datos las procese
+            // Update shared state responses for telemetry processor
             updateState({
                 responses: [textResponse]
             });
 
         } catch (err) {
-            console.error("Error al enviar mensaje:", err);
+            console.error("Error sending message:", err);
             setMessages((prev) => [
                 ...prev,
                 {
                     id: crypto.randomUUID(),
                     role: "assistant",
-                    content: "Error de conexión con el BFA Gateway. Por favor, verificá que el servidor Gateway (Puerto 8000) esté corriendo.",
+                    content: "Connection error with BFA Gateway. Please verify that the Gateway server is online.",
                 },
             ]);
         } finally {
