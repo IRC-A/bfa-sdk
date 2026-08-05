@@ -1681,7 +1681,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
         
         add_system_log("DISCOVERY", caller_id, f"Resolved query '{query}' -> target '{target_node_id}' ({target_url}). Mints DET token with restricted_params: {restricted_params}")
-        return {
+        response_data = {
             "status": "success",
             "det": det,
             "url": target_url,
@@ -1691,6 +1691,15 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "restricted_params": restricted_params,
             "prepared_call": prepared_call
         }
+        print("\n" + "="*80)
+        print(f"=== [BFA GATEWAY /discover RESPUESTA EMITIDA] ===")
+        print(f"🔹 Caller ID       : {caller_id}")
+        print(f"🔹 Query           : {query}")
+        print(f"🔹 Target          : {target_node_id} ({target_type}) @ {target_url}")
+        print(f"🔹 Restricted Params: {json.dumps(restricted_params, ensure_ascii=False)}")
+        print(f"🔹 Prepared Call   : {json.dumps(prepared_call, ensure_ascii=False, indent=2)}")
+        print("="*80 + "\n")
+        return response_data
  
     @app.post("/mint")
     def mint_token(payload: Dict[str, Any]):
