@@ -1576,18 +1576,35 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         target_node_id = best["skill"]
         target_type = best["type"]
         
-        # Extract restricted parameters dynamically using the configured extractors
+        # Extract restricted parameters dynamically using the configured extractors, incoming payload, or schema matching
         restricted_params = {}
-        if payload and "restricted_params" in payload:
-            restricted_params.update(payload.get("restricted_params", {}))
-            
+        if payload:
+            if "restricted_params" in payload and isinstance(payload["restricted_params"], dict):
+                restricted_params.update(payload["restricted_params"])
+            elif "params" in payload and isinstance(payload["params"], dict):
+                restricted_params.update(payload["params"])
+
         import re
         for param_name, pattern in DYNAMIC_PARAMETER_EXTRACTORS.items():
             if param_name not in restricted_params:
                 match = re.search(pattern, query, re.IGNORECASE)
                 if match:
                     restricted_params[param_name] = match.group(1)
-            
+
+        # Heuristic parameter extraction from query if no params were explicitly passed in payload
+        if not restricted_params:
+            schema_props = best["data"].get("input_schema", {}).get("properties", {})
+            if "nombre" in schema_props or "apellido" in schema_props or "phone" in schema_props or "query" in schema_props:
+                # Clean up query prefixes to isolate entity names
+                clean_q = re.sub(r'^(buscar|consultar|ver|obtener|find|search|buscar_contactos|contactos|crm)\s+', '', query, flags=re.IGNORECASE).strip()
+                words = clean_q.split()
+                if "nombre" in schema_props and len(words) >= 1:
+                    restricted_params["nombre"] = words[0]
+                if "apellido" in schema_props and len(words) >= 2:
+                    restricted_params["apellido"] = " ".join(words[1:])
+                elif "query" in schema_props:
+                    restricted_params["query"] = clean_q
+
         # Retrieve prompt_hash if registered for target node
         target_prompt_hash = REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash")
         if not target_prompt_hash:
@@ -1614,14 +1631,36 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         )
         
         target_url = best["data"].get("url") or best["data"].get("server_url")
+        base_tools_url = target_url.rstrip("/") + "/tools" if target_type == "tool" and not target_url.endswith("/tools") else target_url
+
+        # Build arguments for prepared execution call
+        prepared_args = dict(restricted_params)
+        prepared_args["delegated_token"] = det
+
+        prepared_call = {
+            "url": base_tools_url,
+            "method": "POST",
+            "body": {
+                "tool": target_node_id,
+                "arguments": prepared_args
+            }
+        } if target_type == "tool" else {
+            "url": target_url,
+            "method": "POST",
+            "headers": {"Authorization": f"Bearer {det}"},
+            "body": {"query": query, "params": restricted_params}
+        }
         
-        add_system_log("DISCOVERY", caller_id, f"Resolved query '{query}' -> target '{target_node_id}' ({target_url}). Mints DET token.")
+        add_system_log("DISCOVERY", caller_id, f"Resolved query '{query}' -> target '{target_node_id}' ({target_url}). Mints DET token with restricted_params: {restricted_params}")
         return {
             "status": "success",
             "det": det,
             "url": target_url,
             "target_node_id": target_node_id,
-            "type": target_type
+            "type": target_type,
+            "input_schema": best["data"].get("input_schema", {}),
+            "restricted_params": restricted_params,
+            "prepared_call": prepared_call
         }
  
     @app.post("/mint")

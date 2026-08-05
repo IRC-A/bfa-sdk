@@ -140,6 +140,52 @@ def test_logical_channel_masking():
     assert res_aml["best"]["skill"] == "compliance-tool"
 
 
+from bfa_sdk.config import BFAConfig
+
+def test_discover_returns_input_schema():
+    """
+    Tests that /discover returns input_schema in response.
+    """
+    config = BFAConfig()
+    app = create_gateway_app(config)
+    with TestClient(app) as client:
+        # Register a mock tool in ROUTER
+        from bfa_sdk.core.gateway import ROUTER
+        ROUTER.update_registry({
+            "test_tool": {
+                "name": "test_tool",
+                "description": "abrir cuenta bancaria",
+                "type": "tool",
+                "url": "http://localhost:8003",
+                "input_schema": {"type": "object", "properties": {"account_type": {"type": "string"}}}
+            }
+        })
+        ROUTER.build_index()
+
+        # Init handshake to get session token
+        init_res = client.post("/register/init", json={"node_id": "test-agent"})
+        challenge_bytes = init_res.json()["challenge_bytes"]
+        signature = TEST_PRIVATE_KEY.sign(challenge_bytes.encode("utf-8"))
+        verify_res = client.post("/register/verify", json={
+            "node_id": "test-agent",
+            "signature": signature.hex(),
+            "public_key": TEST_PUB_PEM
+        })
+        token = verify_res.json()["session_token"]
+        
+        # Discover query
+        res = client.post("/discover", params={"query": "abrir cuenta"}, json={"session_token": token})
+        assert res.status_code == 200
+        data = res.json()
+        assert "input_schema" in data
+        assert data["input_schema"] == {"type": "object", "properties": {"account_type": {"type": "string"}}}
+        assert "prepared_call" in data
+        assert data["prepared_call"]["url"] == "http://localhost:8003/tools"
+        assert data["prepared_call"]["body"]["tool"] == "test_tool"
+        assert "delegated_token" in data["prepared_call"]["body"]["arguments"]
+
+
+
 @pytest.mark.anyio
 async def test_offline_det_verification_and_parameter_lockdown():
     """
