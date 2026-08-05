@@ -333,6 +333,26 @@ async def health_monitor_loop():
 async def lifespan(app: FastAPI):
     global EMBEDDER, ROUTER
     
+    # Print loaded environment variables and credentials for debugging
+    def mask(val: str) -> str:
+        if not val:
+            return "<NOT SET>"
+        if len(val) <= 10:
+            return val[:3] + "..." + val[-2:]
+        return val[:7] + "..." + val[-6:]
+
+    print("\n================================================================================")
+    print("=== [BFA GATEWAY STARTUP - ENVIRONMENT & CREDENTIALS DIAGNOSTIC] ===")
+    print(f"🔹 OPENAI_API_KEY        : {mask(os.getenv('OPENAI_API_KEY'))}")
+    print(f"🔹 GOOGLE_API_KEY        : {mask(os.getenv('GOOGLE_API_KEY'))}")
+    print(f"🔹 TAVILY_API_KEY        : {mask(os.getenv('TAVILY_API_KEY'))}")
+    print(f"🔹 LANGSMITH_API_KEY     : {mask(os.getenv('LANGSMITH_API_KEY'))}")
+    print(f"🔹 LLM_PROVIDER          : {os.getenv('LLM_PROVIDER', '<NOT SET>')}")
+    print(f"🔹 BFA_USE_MOCK_EMBEDDINGS: {os.getenv('BFA_USE_MOCK_EMBEDDINGS', 'false')}")
+    print(f"🔹 BFA_USE_OPENAI_EMBEDDINGS: {os.getenv('BFA_USE_OPENAI_EMBEDDINGS', 'false')}")
+    print(f"🔹 BFA_REGISTRY_DB_PATH  : {os.getenv('BFA_REGISTRY_DB_PATH', 'bfa_registry_db.json')}")
+    print("================================================================================\n")
+
     # Initialize embedding driver
     if CONFIG.use_mock_embeddings:
         print("IRC-A Gateway: Using DummyEmbedder for fast offline testing.")
@@ -1591,16 +1611,25 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 if match:
                     restricted_params[param_name] = match.group(1)
 
-        # Heuristic parameter extraction from query if no params were explicitly passed in payload
+        # Advanced parameter extraction for dates, ranges, and queries
         if not restricted_params:
             schema_props = best["data"].get("input_schema", {}).get("properties", {})
+            
+            # Extract date ranges (e.g. "del 28 al 31 de Julio" or "desde 2026-07-28 hasta 2026-07-31")
+            date_range_match = re.search(r'(?:del|desde)\s+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}|[0-9]{1,2}\s+(?:de\s+)?[a-zA-Z]+|\d+)\s+(?:al|hasta|a)\s+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}|[0-9]{1,2}\s+(?:de\s+)?[a-zA-Z]+|\d+)', query, re.IGNORECASE)
+            if date_range_match:
+                if "desde" in schema_props:
+                    restricted_params["desde"] = date_range_match.group(1).strip()
+                if "hasta" in schema_props:
+                    restricted_params["hasta"] = date_range_match.group(2).strip()
+            
             if "nombre" in schema_props or "apellido" in schema_props or "phone" in schema_props or "query" in schema_props:
                 # Clean up query prefixes to isolate entity names
                 clean_q = re.sub(r'^(buscar|consultar|ver|obtener|find|search|buscar_contactos|contactos|crm)\s+', '', query, flags=re.IGNORECASE).strip()
                 words = clean_q.split()
-                if "nombre" in schema_props and len(words) >= 1:
+                if "nombre" in schema_props and len(words) >= 1 and "desde" not in restricted_params:
                     restricted_params["nombre"] = words[0]
-                if "apellido" in schema_props and len(words) >= 2:
+                if "apellido" in schema_props and len(words) >= 2 and "desde" not in restricted_params:
                     restricted_params["apellido"] = " ".join(words[1:])
                 elif "query" in schema_props:
                     restricted_params["query"] = clean_q

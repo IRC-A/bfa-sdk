@@ -18,6 +18,25 @@ else:
     os.environ["BFA_USE_OPENAI_EMBEDDINGS"] = "false"
     print("IRC-A Gateway: Using DummyEmbedder for fast local/offline testing.")
 
+def mask(val: str) -> str:
+    if not val:
+        return "<NOT SET>"
+    if len(val) <= 10:
+        return val[:3] + "..." + val[-2:]
+    return val[:7] + "..." + val[-6:]
+
+print("\n================================================================================")
+print("=== [BFA GATEWAY STARTUP - ENVIRONMENT & CREDENTIALS DIAGNOSTIC] ===")
+print(f"🔹 OPENAI_API_KEY        : {mask(os.getenv('OPENAI_API_KEY'))}")
+print(f"🔹 GOOGLE_API_KEY        : {mask(os.getenv('GOOGLE_API_KEY'))}")
+print(f"🔹 TAVILY_API_KEY        : {mask(os.getenv('TAVILY_API_KEY'))}")
+print(f"🔹 LANGSMITH_API_KEY     : {mask(os.getenv('LANGSMITH_API_KEY'))}")
+print(f"🔹 LLM_PROVIDER          : {os.getenv('LLM_PROVIDER', '<NOT SET>')}")
+print(f"🔹 BFA_USE_MOCK_EMBEDDINGS: {os.getenv('BFA_USE_MOCK_EMBEDDINGS', 'false')}")
+print(f"🔹 BFA_USE_OPENAI_EMBEDDINGS: {os.getenv('BFA_USE_OPENAI_EMBEDDINGS', 'false')}")
+print(f"🔹 BFA_REGISTRY_DB_PATH  : {os.getenv('BFA_REGISTRY_DB_PATH', 'bfa_registry_db.json')}")
+print("================================================================ algorithm\n")
+
 os.environ["BFA_GATEWAY_URL"] = "http://127.0.0.1:8000"
 
 from bfa_sdk.core.gateway import create_gateway_app

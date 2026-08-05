@@ -42,6 +42,6 @@ class BFAConfig:
         self.mcp_endpoints = [x.strip() for x in mcps_env.split(",") if x.strip()]
 
         self.embedding_model = os.getenv("BFA_EMBEDDING_MODEL", self.embedding_model)
-        self.use_mock_embeddings = os.getenv("BFA_USE_MOCK_EMBEDDINGS", "false").lower() == "true"
-        self.use_openai_embeddings = os.getenv("BFA_USE_OPENAI_EMBEDDINGS", "false").lower() == "true"
+        self.use_mock_embeddings = os.getenv("BFA_USE_MOCK_EMBEDDINGS", "false").lower() in ("true", "1")
+        self.use_openai_embeddings = os.getenv("BFA_USE_OPENAI_EMBEDDINGS", "false").lower() in ("true", "1")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
