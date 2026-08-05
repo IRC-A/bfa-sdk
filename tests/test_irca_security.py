@@ -141,6 +141,34 @@ def test_logical_channel_masking():
 
 
 @pytest.mark.anyio
+async def test_discover_returns_input_schema(mock_gateway_setup):
+    """
+    Tests that /discover returns input_schema in response.
+    """
+    config = BFAConfig()
+    app = create_gateway_app(config)
+    with TestClient(app) as client:
+        # Init handshake to get session token
+        init_res = client.post("/register/init", json={"node_id": "test-agent"})
+        challenge = init_res.json()["challenge"]
+        sig = TEST_PRIVATE_KEY.sign(bytes.fromhex(challenge)).hex()
+        verify_res = client.post("/register/verify", json={
+            "node_id": "test-agent",
+            "public_key_pem": TEST_PUBLIC_KEY_PEM,
+            "signature_hex": sig
+        })
+        token = verify_res.json()["session_token"]
+        
+        # Discover query
+        res = client.post("/discover", params={"query": "abrir cuenta"}, json={"session_token": token})
+        assert res.status_code == 200
+        data = res.json()
+        assert "input_schema" in data
+        assert isinstance(data["input_schema"], dict)
+
+
+
+@pytest.mark.anyio
 async def test_offline_det_verification_and_parameter_lockdown():
     """
     Tests offline verification inside BFAMCP wrapper and validation constraints (lockdown).

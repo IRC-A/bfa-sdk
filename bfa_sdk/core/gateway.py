@@ -533,7 +533,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "det": det,
             "url": target_url,
             "target_node_id": target_node_id,
-            "type": target_type
+            "type": target_type,
+            "input_schema": best["data"].get("input_schema", {})
         }
  
     @app.post("/mint")
