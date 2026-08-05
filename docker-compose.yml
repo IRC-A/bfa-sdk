@@ -10,6 +10,10 @@ services:
     environment:
       # Propagates the host's OpenAI key if available, otherwise falls back to local DummyEmbedder
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - BFA_REGISTRY_DB_PATH=/app/data/bfa_registry_db.json
     volumes:
-      # Mounts registry database to persist registered agents and tools across restarts
-      - ./bfa_registry_db.json:/app/bfa_registry_db.json
+      # Mounts named volume to persist registry database across restarts without host directory issues
+      - bfa_data:/app/data
+
+volumes:
+  bfa_data:
