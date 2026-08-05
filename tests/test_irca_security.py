@@ -179,6 +179,10 @@ def test_discover_returns_input_schema():
         data = res.json()
         assert "input_schema" in data
         assert data["input_schema"] == {"type": "object", "properties": {"account_type": {"type": "string"}}}
+        assert "prepared_call" in data
+        assert data["prepared_call"]["url"] == "http://localhost:8003/tools"
+        assert data["prepared_call"]["body"]["tool"] == "test_tool"
+        assert "delegated_token" in data["prepared_call"]["body"]["arguments"]
 
 
 
