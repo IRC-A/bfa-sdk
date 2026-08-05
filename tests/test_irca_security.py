@@ -149,14 +149,27 @@ def test_discover_returns_input_schema():
     config = BFAConfig()
     app = create_gateway_app(config)
     with TestClient(app) as client:
+        # Register a mock tool in ROUTER
+        from bfa_sdk.core.gateway import ROUTER
+        ROUTER.update_registry({
+            "test_tool": {
+                "name": "test_tool",
+                "description": "abrir cuenta bancaria",
+                "type": "tool",
+                "url": "http://localhost:8003",
+                "input_schema": {"type": "object", "properties": {"account_type": {"type": "string"}}}
+            }
+        })
+        ROUTER.build_index()
+
         # Init handshake to get session token
         init_res = client.post("/register/init", json={"node_id": "test-agent"})
-        challenge = init_res.json()["challenge"]
-        sig = TEST_PRIVATE_KEY.sign(bytes.fromhex(challenge)).hex()
+        challenge_bytes = init_res.json()["challenge_bytes"]
+        signature = TEST_PRIVATE_KEY.sign(challenge_bytes.encode("utf-8"))
         verify_res = client.post("/register/verify", json={
             "node_id": "test-agent",
-            "public_key_pem": TEST_PUB_PEM,
-            "signature_hex": sig
+            "signature": signature.hex(),
+            "public_key": TEST_PUB_PEM
         })
         token = verify_res.json()["session_token"]
         
@@ -165,7 +178,7 @@ def test_discover_returns_input_schema():
         assert res.status_code == 200
         data = res.json()
         assert "input_schema" in data
-        assert isinstance(data["input_schema"], dict)
+        assert data["input_schema"] == {"type": "object", "properties": {"account_type": {"type": "string"}}}
 
 
 
