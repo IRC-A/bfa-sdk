@@ -140,8 +140,7 @@ def test_logical_channel_masking():
     assert res_aml["best"]["skill"] == "compliance-tool"
 
 
-@pytest.mark.anyio
-async def test_discover_returns_input_schema(mock_gateway_setup):
+def test_discover_returns_input_schema():
     """
     Tests that /discover returns input_schema in response.
     """
