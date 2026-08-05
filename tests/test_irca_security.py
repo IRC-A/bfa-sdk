@@ -140,6 +140,8 @@ def test_logical_channel_masking():
     assert res_aml["best"]["skill"] == "compliance-tool"
 
 
+from bfa_sdk.config import BFAConfig
+
 def test_discover_returns_input_schema():
     """
     Tests that /discover returns input_schema in response.
@@ -153,7 +155,7 @@ def test_discover_returns_input_schema():
         sig = TEST_PRIVATE_KEY.sign(bytes.fromhex(challenge)).hex()
         verify_res = client.post("/register/verify", json={
             "node_id": "test-agent",
-            "public_key_pem": TEST_PUBLIC_KEY_PEM,
+            "public_key_pem": TEST_PUB_PEM,
             "signature_hex": sig
         })
         token = verify_res.json()["session_token"]
