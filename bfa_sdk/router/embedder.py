@@ -29,7 +29,10 @@ class OpenAIEmbedder(AbstractEmbedder):
     def _get_client(self):
         try:
             from openai import OpenAI
-            current_key = os.getenv("OPENAI_API_KEY") or self.api_key
+            current_key = os.getenv("OPENAI_API_KEY")
+            if not current_key or current_key.startswith("sk-proj-9KX7"):
+                current_key = self.api_key
+            current_key = (current_key or "").strip().strip("'\"")
             return OpenAI(api_key=current_key)
         except ImportError:
             raise ImportError(
