@@ -1,0 +1,10 @@
+*.tgz
+node_modules/
+dist/tsconfig.tsbuildinfo
+.git/
+.gitignore
+tsconfig.json
+gulpfile.js
+index.ts
+nodes/**/*.ts
+credentials/**/*.ts

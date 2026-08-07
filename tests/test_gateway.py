@@ -447,15 +447,19 @@ def test_gateway_register_agent_collisions(mock_discover_agents, mock_discover_t
         res = client.post("/register/agent", params={"url": "http://localhost:8001"})
         assert res.status_code == 200
         
-        # Test Duplicate ID Collision
-        res = client.post("/register/agent", params={"url": "http://localhost:8001"})
-        assert res.status_code == 409
-        assert "is already registered" in res.json()["detail"]
+        # Test Re-registration / Upsert for same agent (Idempotent restart)
+        res_re = client.post("/register/agent", params={"url": "http://localhost:8001"})
+        assert res_re.status_code == 200
         
-        # Test Semantic Content Collision
-        res = client.post("/register/agent", params={"url": "http://localhost:8009"})
-        assert res.status_code == 409
-        assert "identical semantic metadata is already registered" in res.json()["detail"]
+        # Test Duplicate URL Collision by a DIFFERENT node_id
+        res_col = client.post("/register/agent", params={"url": "http://localhost:8001", "node_id": "different_rogue_agent"})
+        assert res_col.status_code == 409
+        assert "is already registered" in res_col.json()["detail"]
+        
+        # Test Semantic Content Collision by a DIFFERENT node at a different URL
+        res_sem = client.post("/register/agent", params={"url": "http://localhost:8009", "node_id": "different_rogue_agent"})
+        assert res_sem.status_code == 409
+        assert "identical semantic metadata is already registered" in res_sem.json()["detail"]
 
     import bfa_sdk.core.gateway as gateway_mod
     if gateway_mod.ROUTER:
@@ -503,15 +507,19 @@ def test_gateway_register_mcp_collisions(mock_discover_agents, mock_discover_too
         res = client.post("/register/mcp", params={"url": "http://localhost:8003"})
         assert res.status_code == 200
         
-        # Test Duplicate ID Collision
-        res = client.post("/register/mcp", params={"url": "http://localhost:8003"})
-        assert res.status_code == 409
-        assert "is already registered" in res.json()["detail"]
+        # Test Re-registration / Upsert for same MCP tool server (Idempotent restart)
+        res_re = client.post("/register/mcp", params={"url": "http://localhost:8003"})
+        assert res_re.status_code == 200
         
-        # Test Semantic Content Collision
-        res = client.post("/register/mcp", params={"url": "http://localhost:8004"})
-        assert res.status_code == 409
-        assert "identical semantic metadata is already registered" in res.json()["detail"]
+        # Test Duplicate URL Collision by a DIFFERENT node_id
+        res_col = client.post("/register/mcp", params={"url": "http://localhost:8003", "node_id": "different_mcp_node"})
+        assert res_col.status_code == 409
+        assert "is already registered" in res_col.json()["detail"]
+        
+        # Test Semantic Content Collision by a DIFFERENT server at a different URL
+        res_sem = client.post("/register/mcp", params={"url": "http://localhost:8004", "node_id": "different_mcp_node"})
+        assert res_sem.status_code == 409
+        assert "identical semantic metadata is already registered" in res_sem.json()["detail"]
 
     import bfa_sdk.core.gateway as gateway_mod
     if gateway_mod.ROUTER:

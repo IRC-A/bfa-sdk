@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="240" height="240" fill="none">
+  <!-- Sleek premium gradient background -->
+  <defs>
+    <linearGradient id="bg-grad-mcp" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F2027" />
+      <stop offset="100%" stop-color="#203A43" />
+    </linearGradient>
+    <linearGradient id="glow-grad-mcp" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F27121" />
+      <stop offset="100%" stop-color="#E94057" />
+    </linearGradient>
+  </defs>
+
+  <!-- Base Circle Node -->
+  <rect width="24" height="24" rx="6" fill="url(#bg-grad-mcp)" />
+
+  <!-- Double connection line (Relay/Protocol concept) -->
+  <path d="M6 8 L18 8 M6 16 L18 16" stroke="url(#glow-grad-mcp)" stroke-width="1.5" stroke-linecap="round" />
+  
+  <!-- Centered Connector Box (Context Interface) -->
+  <rect x="9.5" y="5.5" width="5" height="13" rx="1.5" fill="#0F2027" stroke="url(#glow-grad-mcp)" stroke-width="1.2" />
+
+  <!-- Pins -->
+  <circle cx="12" cy="9" r="0.8" fill="#FFFFFF" />
+  <circle cx="12" cy="15" r="0.8" fill="#FFFFFF" />
+</svg>

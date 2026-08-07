@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Sandro G. All rights reserved.
 # Licensed under AGPLv3 / Commercial Dual License.
 # Backend for Agents SDK (BFA)
-# Version 0.1.0
+# Version 0.3.0
 """
 BFA SDK: A lightweight framework for Backend for Agents (BFA) architecture with FAISS semantic routing.
 """

@@ -23,10 +23,18 @@ class OpenAIEmbedder(AbstractEmbedder):
     Fast, lightweight, and perfect for AWS Lambda environments.
     """
     def __init__(self, model_name: str = "text-embedding-3-small", api_key: str = None):
+        self.api_key = api_key
+        self.model_name = model_name
+        self._get_client()
+
+    def _get_client(self):
         try:
             from openai import OpenAI
-            self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
-            self.model_name = model_name
+            current_key = os.getenv("OPENAI_API_KEY")
+            if not current_key or current_key.startswith("sk-proj-9KX7"):
+                current_key = self.api_key
+            current_key = (current_key or "").strip().strip("'\"")
+            return OpenAI(api_key=current_key)
         except ImportError:
             raise ImportError(
                 "openai package not found. "
@@ -34,18 +42,21 @@ class OpenAIEmbedder(AbstractEmbedder):
             )
 
     def embed_query(self, text: str) -> List[float]:
-        response = self.client.embeddings.create(
+        client = self._get_client()
+        response = client.embeddings.create(
             input=[text],
             model=self.model_name
         )
         return response.data[0].embedding
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        response = self.client.embeddings.create(
+        client = self._get_client()
+        response = client.embeddings.create(
             input=texts,
             model=self.model_name
         )
         return [item.embedding for item in response.data]
+
 
 
 class LocalEmbedder(AbstractEmbedder):

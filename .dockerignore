@@ -1,0 +1,15 @@
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git
+.github
+.pytest_cache/
+bfa_registry_db.json
+registered_endpoints.json
+dist/
+build/
+node_modules/
+terraform/
