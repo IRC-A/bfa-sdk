@@ -174,7 +174,7 @@ def test_discover_returns_input_schema():
         token = verify_res.json()["session_token"]
         
         # Discover query
-        res = client.post("/discover", params={"query": "abrir cuenta"}, json={"session_token": token})
+        res = client.post("/discover", params={"query": "abrir cuenta"}, json={"session_token": token, "threshold": 0.0})
         assert res.status_code == 200
         data = res.json()
         assert "input_schema" in data
@@ -824,7 +824,8 @@ def test_discover_success_flow():
         
         # Call /discover
         res = client.post("/discover?query=process loan application for customer id-992", json={
-            "session_token": session_token
+            "session_token": session_token,
+            "threshold": 0.0
         })
         assert res.status_code == 200
     data = res.json()
@@ -839,7 +840,8 @@ def test_discover_success_flow():
     
     # Call /discover with campaign_id pattern (covers the campaign query extraction line in gateway.py)
     res_camp = client.post("/discover?query=process keywords for campaign camp-777", json={
-        "session_token": session_token
+        "session_token": session_token,
+        "threshold": 0.0
     })
     assert res_camp.status_code == 200
     data_camp = res_camp.json()

@@ -444,22 +444,25 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         return registry
 
     @app.get("/resolve")
-    def resolve(query: str, top_k: int = Query(3), threshold: float = Query(0.3), exclude_node_id: Optional[str] = Query(None)):
+    def resolve(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
-        return ROUTER.resolve(query, top_k=top_k, threshold=threshold, exclude_node_id=exclude_node_id)
+        eff_threshold = threshold if threshold is not None else CONFIG.semantic_threshold
+        return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, exclude_node_id=exclude_node_id)
 
     @app.get("/resolve/agents")
-    def resolve_agents(query: str, top_k: int = Query(3), threshold: float = Query(0.3), exclude_node_id: Optional[str] = Query(None)):
+    def resolve_agents(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
-        return ROUTER.resolve(query, top_k=top_k, threshold=threshold, filter_type="agent", exclude_node_id=exclude_node_id)
+        eff_threshold = threshold if threshold is not None else CONFIG.semantic_threshold
+        return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, filter_type="agent", exclude_node_id=exclude_node_id)
 
     @app.get("/resolve/tools")
-    def resolve_tools(query: str, top_k: int = Query(3), threshold: float = Query(0.3), exclude_node_id: Optional[str] = Query(None)):
+    def resolve_tools(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
-        return ROUTER.resolve(query, top_k=top_k, threshold=threshold, filter_type="tool", exclude_node_id=exclude_node_id)
+        eff_threshold = threshold if threshold is not None else CONFIG.semantic_threshold
+        return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, filter_type="tool", exclude_node_id=exclude_node_id)
 
     @app.get("/public_key")
     def get_public_key():
@@ -1551,7 +1554,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
 
     @app.post("/discover")
-    def discover(query: str = None, exclude_node_id: str = None, payload: Dict[str, Any] = None):
+    def discover(query: str = None, threshold: float = None, exclude_node_id: str = None, payload: Dict[str, Any] = None):
         """
         Secure semantic discovery (IRC-A Gateway broker).
         Verifies session token, performs logical channel masking, excludes calling node ID if requested, and mints an ephemeral DET.
@@ -1583,15 +1586,18 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         effective_exclude_id = exclude_node_id or payload.get("exclude_node_id") or caller_id
             
+        req_threshold = threshold if threshold is not None else (payload.get("threshold") if payload.get("threshold") is not None else CONFIG.semantic_threshold)
+
         result = ROUTER.resolve(
             actual_query, 
+            threshold=req_threshold,
             agent_channels=caller_channels, 
             exclude_node_id=effective_exclude_id
         )
         best = result.get("best")
         if not best:
-            add_system_log("DISCOVERY", caller_id, f"Failed discovery: No capability found matching query '{query}' under authorized channels.")
-            raise HTTPException(status_code=404, detail="No matching capability found under authorized channels")
+            add_system_log("DISCOVERY", caller_id, f"Failed discovery: No capability found matching query '{actual_query}' above threshold {req_threshold}.")
+            raise HTTPException(status_code=404, detail=f"No matching capability found above threshold {req_threshold}")
             
         target_node_id = best["skill"]
         target_type = best["type"]
@@ -1901,11 +1907,12 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
             
-        result = ROUTER.resolve(query, filter_type="agent")
+        req_threshold = payload.get("threshold") if (payload and payload.get("threshold") is not None) else CONFIG.semantic_threshold
+        result = ROUTER.resolve(query, threshold=req_threshold, filter_type="agent")
         best = result.get("best")
         
         if not best:
-            raise HTTPException(status_code=404, detail="No matching agent found above threshold.")
+            raise HTTPException(status_code=404, detail=f"No matching agent found above threshold {req_threshold}.")
             
         agent_url = best["data"]["url"]
         target_node_id = best.get("skill") or best.get("data", {}).get("node_id") or "agent"
@@ -2041,6 +2048,16 @@ def main():
             os.environ["BFA_USE_OPENAI_EMBEDDINGS"] = "false"
             print("IRC-A Gateway: Falling back to DummyEmbedder (offline mock).")
 
+    import logging
+
+    class EndpointFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            msg = record.getMessage()
+            polling_paths = ["GET /skills", "GET /gateway-logs", "GET /token-metrics", "GET /logs"]
+            return not any(path in msg for path in polling_paths)
+
+    logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+
     gateway_app = create_gateway_app()
-    uvicorn.run(gateway_app, host=host, port=port, log_level="warning")
+    uvicorn.run(gateway_app, host=host, port=port)
 

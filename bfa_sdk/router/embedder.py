@@ -25,6 +25,7 @@ class OpenAIEmbedder(AbstractEmbedder):
     def __init__(self, model_name: str = "text-embedding-3-small", api_key: str = None):
         self.api_key = api_key
         self.model_name = model_name
+        self._get_client()
 
     def _get_client(self):
         try:

@@ -44,6 +44,17 @@ from bfa_sdk.core.gateway import create_gateway_app
 # Instantiate complete Gateway App with full UI, Observability, and Live Transaction Logs
 app = create_gateway_app()
 
+import logging
+
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        # Suppress polling HTTP GET endpoints from console output
+        polling_paths = ["GET /skills", "GET /gateway-logs", "GET /token-metrics", "GET /logs"]
+        return not any(path in msg for path in polling_paths)
+
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
