@@ -1602,7 +1602,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         target_node_id = best["skill"]
         target_type = best["type"]
         
-        # Extract restricted parameters dynamically using the configured extractors, incoming payload, or schema matching
+        # Extract restricted parameters from incoming request payload or dynamic extractors
         restricted_params = {}
         if payload:
             if "restricted_params" in payload and isinstance(payload["restricted_params"], dict):
@@ -1613,32 +1613,9 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         import re
         for param_name, pattern in DYNAMIC_PARAMETER_EXTRACTORS.items():
             if param_name not in restricted_params:
-                match = re.search(pattern, query, re.IGNORECASE)
+                match = re.search(pattern, actual_query, re.IGNORECASE)
                 if match:
                     restricted_params[param_name] = match.group(1)
-
-        # Advanced parameter extraction for dates, ranges, and queries
-        if not restricted_params:
-            schema_props = best["data"].get("input_schema", {}).get("properties", {})
-            
-            # Extract date ranges (e.g. "del 28 al 31 de Julio" or "desde 2026-07-28 hasta 2026-07-31")
-            date_range_match = re.search(r'(?:del|desde)\s+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}|[0-9]{1,2}\s+(?:de\s+)?[a-zA-Z]+|\d+)\s+(?:al|hasta|a)\s+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}|[0-9]{1,2}\s+(?:de\s+)?[a-zA-Z]+|\d+)', query, re.IGNORECASE)
-            if date_range_match:
-                if "desde" in schema_props:
-                    restricted_params["desde"] = date_range_match.group(1).strip()
-                if "hasta" in schema_props:
-                    restricted_params["hasta"] = date_range_match.group(2).strip()
-            
-            if "nombre" in schema_props or "apellido" in schema_props or "phone" in schema_props or "query" in schema_props:
-                # Clean up query prefixes to isolate entity names
-                clean_q = re.sub(r'^(buscar|consultar|ver|obtener|find|search|buscar_contactos|contactos|crm)\s+', '', query, flags=re.IGNORECASE).strip()
-                words = clean_q.split()
-                if "nombre" in schema_props and len(words) >= 1 and "desde" not in restricted_params:
-                    restricted_params["nombre"] = words[0]
-                if "apellido" in schema_props and len(words) >= 2 and "desde" not in restricted_params:
-                    restricted_params["apellido"] = " ".join(words[1:])
-                elif "query" in schema_props:
-                    restricted_params["query"] = clean_q
 
         # Retrieve prompt_hash if registered for target node
         target_prompt_hash = REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash")
