@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from "react";
 import AppLayout from "./Layout";
 import { useAppState } from "./StateContext";
+import { GATEWAY_URL } from "./config";
 
 export default function RegistryPage() {
     const { updateState } = useAppState();
@@ -13,7 +14,7 @@ export default function RegistryPage() {
     async function fetchRegistry() {
         setLoading(true);
         try {
-            const response = await fetch("http://localhost:8000/skills");
+            const response = await fetch(`${GATEWAY_URL}/skills`);
             if (response.ok) {
                 const data = await response.json();
                 setSkills(data);
@@ -41,17 +42,17 @@ export default function RegistryPage() {
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-gray-800 pb-4">
                     <div>
                         <h1 className="text-3xl font-bold text-white flex items-center gap-2">
-                            <span>🔌</span> Nodo Central IRC-A (BFA Gateway)
+                            <span>🔌</span> IRC-A Central Gateway (BFA)
                         </h1>
                         <p className="text-gray-400 text-sm mt-1">
-                            Directorio y Ruteador Semántico de Agentes Financieros y Microservicios MCP en Tiempo Real.
+                            Real-time Semantic Router and Directory for Financial Agents and MCP Microservices.
                         </p>
                     </div>
                     <button 
                         onClick={fetchRegistry}
                         className="mt-4 md:mt-0 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition text-sm font-semibold border border-gray-700 flex items-center gap-2"
                     >
-                        <span>🔄</span> Actualizar Directorio
+                        <span>🔄</span> Refresh Directory
                     </button>
                 </div>
 
@@ -61,23 +62,23 @@ export default function RegistryPage() {
                     <div className="lg:col-span-2 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col justify-between">
                         <div className="flex flex-col gap-4">
                             <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                                <span>⚡</span> Conectar Nuevo Agente / MCP en Caliente
+                                <span>⚡</span> Hot-Plug New Agent / MCP Server
                             </h2>
                             <p className="text-gray-400 text-xs">
-                                Por motivos de seguridad (IRC-A), el registro directo desde la interfaz web ha sido inhabilitado. Realiza el acoplamiento de servicios mediante peticiones programáticas cURL:
+                                For security reasons (IRC-A), direct registration from the web UI is disabled. Register new microservices via authenticated HTTP API requests:
                             </p>
                             
                             <div className="flex flex-col gap-3 mt-1">
                                 <div>
-                                    <span className="text-xs font-semibold text-blue-400 block mb-1">Registrar un Agente (A2A):</span>
+                                    <span className="text-xs font-semibold text-blue-400 block mb-1">Register an Agent (A2A):</span>
                                     <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
-                                        {`curl -X POST "http://localhost:8000/register/agent?url=http://127.0.0.1:8104&channels=%23content"`}
+                                        {`curl -X POST "${GATEWAY_URL}/register/agent?url=https://your-agent-url.run.app&channels=%23finance"`}
                                     </pre>
                                 </div>
                                 <div>
-                                    <span className="text-xs font-semibold text-indigo-400 block mb-1">Registrar un Servidor MCP:</span>
+                                    <span className="text-xs font-semibold text-indigo-400 block mb-1">Register an MCP Server:</span>
                                     <pre className="bg-gray-900 border border-gray-750 p-2.5 rounded-lg text-xs text-gray-300 font-mono overflow-x-auto select-all">
-                                        {`curl -X POST "http://localhost:8000/register/mcp?url=http://127.0.0.1:8102&channels=%23content"`}
+                                        {`curl -X POST "${GATEWAY_URL}/register/mcp?url=https://your-mcp-url.run.app&channels=%23finance"`}
                                     </pre>
                                 </div>
                             </div>
@@ -86,24 +87,24 @@ export default function RegistryPage() {
 
                     {/* Stats Card */}
                     <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col gap-4">
-                        <h2 className="text-lg font-semibold text-white">📊 Métricas del Servidor</h2>
+                        <h2 className="text-lg font-semibold text-white">📊 Server Metrics</h2>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 text-center">
                                 <span className="text-2xl font-bold text-blue-400">{agentsList.length}</span>
-                                <p className="text-gray-400 text-[10px] uppercase font-bold tracking-wider mt-1">Agentes Activos</p>
+                                <p className="text-gray-400 text-[10px] uppercase font-bold tracking-wider mt-1">Active Agents</p>
                             </div>
                             <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 text-center">
                                 <span className="text-2xl font-bold text-indigo-400">{toolsList.length}</span>
-                                <p className="text-gray-400 text-[10px] uppercase font-bold tracking-wider mt-1">Tools Indexadas</p>
+                                <p className="text-gray-400 text-[10px] uppercase font-bold tracking-wider mt-1">Indexed Tools</p>
                             </div>
                         </div>
                         <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-xs text-gray-400">
                             <div className="flex justify-between py-1 border-b border-gray-800">
-                                <span>Enrutador Semántico:</span>
+                                <span>Semantic Router:</span>
                                 <span className="text-green-400 font-semibold">FAISS CPU</span>
                             </div>
                             <div className="flex justify-between py-1 mt-1">
-                                <span>Estado del Nodo:</span>
+                                <span>Node Status:</span>
                                 <span className="text-green-400 font-semibold">ONLINE</span>
                             </div>
                         </div>
@@ -115,11 +116,11 @@ export default function RegistryPage() {
                     {/* Agents list */}
                     <div className="flex flex-col gap-4">
                         <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                            <span>🤖</span> Agentes Conectados ({agentsList.length})
+                            <span>🤖</span> Connected Agents ({agentsList.length})
                         </h2>
                         {agentsList.length === 0 ? (
                             <div className="bg-gray-800 border border-gray-850 text-gray-500 rounded-2xl p-6 text-center text-sm border-dashed">
-                                Ningún agente registrado dinámicamente.
+                                No agents dynamically registered.
                             </div>
                         ) : (
                             <div className="flex flex-col gap-3">
@@ -152,11 +153,11 @@ export default function RegistryPage() {
                     {/* Tools list */}
                     <div className="flex flex-col gap-4">
                         <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                            <span>🛠️</span> Herramientas MCP Indexadas ({toolsList.length})
+                            <span>🛠️</span> Indexed MCP Tools ({toolsList.length})
                         </h2>
                         {toolsList.length === 0 ? (
                             <div className="bg-gray-800 border border-gray-850 text-gray-500 rounded-2xl p-6 text-center text-sm border-dashed">
-                                Ningún servidor MCP registrado dinámicamente.
+                                No MCP servers dynamically registered.
                             </div>
                         ) : (
                             <div className="flex flex-col gap-3">

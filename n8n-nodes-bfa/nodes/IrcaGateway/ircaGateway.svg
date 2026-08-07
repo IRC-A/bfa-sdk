@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="240" height="240" fill="none">
+  <!-- Sleek premium gradient background -->
+  <defs>
+    <linearGradient id="bg-grad-gw" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141E30" />
+      <stop offset="100%" stop-color="#243B55" />
+    </linearGradient>
+    <linearGradient id="glow-grad-gw" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00C9FF" />
+      <stop offset="100%" stop-color="#92FE9D" />
+    </linearGradient>
+  </defs>
+
+  <!-- Base Circle Node -->
+  <rect width="24" height="24" rx="6" fill="url(#bg-grad-gw)" />
+
+  <!-- Shield / Security boundary symbol -->
+  <path d="M12 4 L18 6.5 V11 C18 15 15.5 18 12 19 C8.5 18 6 15 6 11 V6.5 L12 4 Z" stroke="url(#glow-grad-gw)" stroke-width="1.2" stroke-linejoin="round" />
+  
+  <!-- Semantic routing arrows inside shield -->
+  <path d="M12 7 V15 M10 12 L12 10 L14 12" stroke="url(#glow-grad-gw)" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  
+  <!-- Center Core dot -->
+  <circle cx="12" cy="15" r="0.8" fill="#FFFFFF" />
+</svg>

@@ -6,7 +6,8 @@ from a2a.server.agent_execution.context import RequestContext
 
 # Configure Logical Channels for masking
 os.environ["IRCA_CHANNELS"] = "#finance"
-os.environ["BFA_GATEWAY_URL"] = "http://localhost:8000"
+gateway_url = os.getenv("BFA_GATEWAY_URL", "http://127.0.0.1:18000")
+agent_public_url = os.getenv("PUBLIC_URL", os.getenv("AGENT_URL", "http://127.0.0.1:18001"))
 
 class CreditAdvisorAgent(BFAAgent):
     def __init__(self):
@@ -16,7 +17,8 @@ class CreditAdvisorAgent(BFAAgent):
             description="Assesses user financial standing and retrieves transaction ratings.",
             tags=["credit", "advisor", "bank"],
             examples=["analyze financial score", "fetch rating for user"],
-            url="http://localhost:8001"
+            url=agent_public_url,
+            gateway_url=gateway_url
         )
 
     async def run(self, user_message: str, context: RequestContext) -> str:
@@ -42,7 +44,7 @@ class CreditAdvisorAgent(BFAAgent):
         try:
             async with httpx.AsyncClient() as client:
                 discover_res = await client.post(
-                    "http://localhost:8000/discover",
+                    "http://127.0.0.1:18000/discover",
                     params={"query": f"get bank score for customer {customer_id}"},
                     json={"session_token": self.session_token},
                     timeout=5
@@ -80,4 +82,6 @@ agent_instance = CreditAdvisorAgent()
 app = agent_instance.app
 
 if __name__ == "__main__":
-    uvicorn.run("agent:app", host="127.0.0.1", port=8001, log_level="warning")
+    bind_host = os.getenv("HOST", "0.0.0.0")
+    bind_port = int(os.getenv("PORT", 18001))
+    uvicorn.run("agent:app", host=bind_host, port=bind_port, log_level="warning")

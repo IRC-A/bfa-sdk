@@ -1,10 +1,20 @@
+import os
 import uvicorn
+import asyncio
 from a2a.server.agent_execution.context import RequestContext
 from bfa_sdk.core.agent import BFAAgent
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None
+
+gateway_url = os.getenv("BFA_GATEWAY_URL", "http://127.0.0.1:8000")
+agent_public_url = os.getenv("PUBLIC_URL", os.getenv("AGENT_URL", "http://127.0.0.1:8002"))
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 class MockCuentasAgent(BFAAgent):
     """
-    Mock Accounts Agent subclassing BFAAgent representing cuentas microservice.
+    Real AI Accounts Agent powered by OpenAI subclassing BFAAgent.
     """
     def __init__(self, url: str):
         super().__init__(
@@ -18,18 +28,41 @@ class MockCuentasAgent(BFAAgent):
                 "crear cuenta corriente",
                 "consultar mi cuenta"
             ],
-            url=url
+            url=url,
+            gateway_url=gateway_url
         )
+        self.openai_client = AsyncOpenAI(api_key=openai_api_key) if (AsyncOpenAI and openai_api_key) else None
 
     async def run(self, user_message: str, context: RequestContext) -> str:
-        return f"[Cuentas Agent] Recibido pedido sobre cuentas bancarias: '{user_message}'."
+        if self.openai_client:
+            try:
+                response = await self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": (
+                                "You are MDBank's Accounts Specialist AI Agent. "
+                                "You assist customers with opening bank/savings accounts, checking account balances, "
+                                "and managing account information. Be polite, professional, helpful, and answer in the language of the user query."
+                            )
+                        },
+                        {"role": "user", "content": user_message}
+                    ],
+                    temperature=0.7,
+                    max_tokens=350
+                )
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                print(f"[Cuentas Agent LLM Error]: {e}")
+        
+        return f"Hello! I am MDBank's Accounts Specialist. I can help you open a checking or savings account, or check your account balance. How can I assist you today regarding: '{user_message}'?"
 
-
-# Initialize on port 8002
-agent_url = "http://127.0.0.1:8002"
-agent = MockCuentasAgent(url=agent_url)
+agent = MockCuentasAgent(url=agent_public_url)
 app = agent.app
 
 if __name__ == "__main__":
-    print("Starting mock Cuentas Agent server on port 8002...")
-    uvicorn.run(app, host="127.0.0.1", port=8002, log_level="info")
+    bind_host = os.getenv("HOST", "0.0.0.0")
+    bind_port = int(os.getenv("PORT", 8002))
+    print(f"Starting Cuentas Agent server on {bind_host}:{bind_port}...")
+    uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")

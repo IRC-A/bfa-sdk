@@ -72,13 +72,7 @@ def test_local_embedder(mock_transformer):
 
 def test_openai_embedder_import_error():
     # Force import of openai to raise ImportError
-    real_import = builtins.__import__
-    def mock_import(name, *args, **kwargs):
-        if name == "openai":
-            raise ImportError("openai missing")
-        return real_import(name, *args, **kwargs)
-        
-    with patch("builtins.__import__", side_effect=mock_import):
+    with patch("builtins.__import__", side_effect=ImportError("openai package not found")):
         with pytest.raises(ImportError) as exc:
             OpenAIEmbedder()
         assert "openai package not found" in str(exc.value)

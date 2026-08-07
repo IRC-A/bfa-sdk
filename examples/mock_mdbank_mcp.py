@@ -1,5 +1,10 @@
+import os
 import uvicorn
+import asyncio
 from bfa_sdk.core.mcp import BFAMCP
+
+gateway_url = os.getenv("BFA_GATEWAY_URL", "http://127.0.0.1:8000")
+mcp_public_url = os.getenv("PUBLIC_URL", os.getenv("MCP_URL", "http://127.0.0.1:8001"))
 
 # Initialize BFA-managed MCP Server representing MDBank Resources
 mcp_server = BFAMCP("MDBank")
@@ -45,9 +50,21 @@ async def solicitar_tarjeta(cpf: str, tipo: str) -> str:
     return f"Solicitud de tarjeta tipo '{tipo}' procesada correctamente para el CPF: {cpf}."
 
 
+# Start registration helper on startup asynchronously
+async def startup_register():
+    await asyncio.sleep(1)
+    await mcp_server.register_with_gateway(gateway_url, mcp_public_url)
+
+# Spawn background register task
+import threading
+loop = asyncio.new_event_loop()
+threading.Thread(target=lambda: loop.run_until_complete(startup_register()), daemon=True).start()
+
 # Expose Starlette ASGI app for Uvicorn
 app = mcp_server.app
 
 if __name__ == "__main__":
-    print("Starting mock MDBank MCP server on port 8001...")
-    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
+    bind_host = os.getenv("HOST", "0.0.0.0")
+    bind_port = int(os.getenv("PORT", 8001))
+    print(f"Starting mock MDBank MCP server on {bind_host}:{bind_port}...")
+    uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")
