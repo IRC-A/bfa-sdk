@@ -3,7 +3,7 @@
 A generic and opinionated framework and SDK to implement the **BFA (Backend for Agents)** pattern and the **IRC-A (Internet Relay Chat for Agents)** protocol, featuring native support for **FAISS-based Semantic Routing (vector search)**, asymmetric zero-trust security boundaries, and standard abstractions for A2A Agents and MCP Servers.
 
 Read the official protocol specification:
-👉 **[IRC-A Protocol Whitepaper (v1.0.0)](https://github.com/IRC-A/whitepaper)** - *Decentralized Agent Networks, Semantic Capability Routing, and Secure-by-Design Software Architecture.*
+👉 **[IRC-A Protocol Whitepaper](https://github.com/IRC-A/whitepaper)** - *Decentralized Agent Networks, Semantic Capability Routing, and Secure-by-Design Software Architecture.*
 
 ---
 
