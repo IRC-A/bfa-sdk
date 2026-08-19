@@ -1617,6 +1617,9 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 if match:
                     restricted_params[param_name] = match.group(1)
 
+        # Heuristic parameter extraction from query if no params were explicitly passed in payload
+        if not restricted_params:
+            schema_props = best["data"].get("input_schema", {}).get("properties", {})
         # Advanced parameter extraction for dates, ranges, and queries
         if not restricted_params:
             schema_props = best["data"].get("input_schema", {}).get("properties", {})
@@ -1633,9 +1636,9 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 # Clean up query prefixes to isolate entity names
                 clean_q = re.sub(r'^(buscar|consultar|ver|obtener|find|search|buscar_contactos|contactos|crm)\s+', '', query, flags=re.IGNORECASE).strip()
                 words = clean_q.split()
-                if "nombre" in schema_props and len(words) >= 1 and "desde" not in restricted_params:
+                if "nombre" in schema_props and len(words) >= 1:
                     restricted_params["nombre"] = words[0]
-                if "apellido" in schema_props and len(words) >= 2 and "desde" not in restricted_params:
+                if "apellido" in schema_props and len(words) >= 2:
                     restricted_params["apellido"] = " ".join(words[1:])
                 elif "query" in schema_props:
                     restricted_params["query"] = clean_q
