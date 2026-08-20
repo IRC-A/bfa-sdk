@@ -20,11 +20,11 @@ build/
 bfa_registry_db.json
 registered_endpoints.json
 
-# Node/React frontend
-examples/frontend/node_modules/
+# Node/React frontend & n8n nodes
+node_modules/
+**/node_modules/
+n8n-nodes-bfa/dist/
 examples/frontend/build/
-examples/frontend/.pnp/
-examples/frontend/.pnp.js
 examples/frontend/coverage/
 examples/frontend/.env.local
 examples/frontend/.env.development.local
