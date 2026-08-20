@@ -1,5 +1,9 @@
 import pytest
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
 @pytest.fixture(autouse=True)
 def clear_global_router_registry():
     """
