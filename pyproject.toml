@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bfa-irc-a-sdk"
+name = "irc-a-sdk"
 version = "0.3.0"
-description = "A generic Backend for Agents (BFA) SDK with FAISS semantic routing."
+description = "Lightweight Python SDK for building autonomous agents (A2A) and FastMCP tool servers following the IRC-A protocol."
 readme = "README.md"
 authors = [
     { name = "Sandro Garcia" }
@@ -16,31 +16,15 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "fastapi",
-    "uvicorn",
+    "starlette",
     "httpx",
     "python-dotenv",
     "a2a-sdk",
-    "numpy",
-    "faiss-cpu",
-    "pydantic",
     "fastmcp",
-    "pyyaml",
-    "mangum",
-    "openai",
-    "pyjwt",
     "cryptography"
 ]
 requires-python = ">=3.10"
 
-[project.optional-dependencies]
-local = [
-    "sentence-transformers"
-]
-
-[project.scripts]
-irc-a-gateway = "bfa_sdk.core.gateway:main"
-
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["bfa_sdk*"]
+include = ["bfa_sdk*", "irc_a_sdk*"]

@@ -1,11 +1,8 @@
 # Copyright (c) 2026 Sandro G. All rights reserved.
 # Licensed under AGPLv3 / Commercial Dual License.
-# IRC-A SDK / BFA SDK
-# Version 0.3.0
 """
-IRC-A SDK: A lightweight client framework for building autonomous agents (A2A) and FastMCP tool servers.
+IRC-A SDK: Lightweight Python framework for building autonomous agents and FastMCP tool servers.
 """
-
 from bfa_sdk.agent import BFAAgent
 from bfa_sdk.interactive_agent import BFAInteractiveAgent, MemoryStack
 from bfa_sdk.mcp import BFAMCP

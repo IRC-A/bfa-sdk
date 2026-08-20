@@ -1,13 +1,50 @@
 import os
 import uvicorn
 import asyncio
+import random
 from bfa_sdk.core.mcp import BFAMCP
 
 gateway_url = os.getenv("BFA_GATEWAY_URL", "http://127.0.0.1:8000")
 mcp_public_url = os.getenv("PUBLIC_URL", os.getenv("MCP_URL", "http://127.0.0.1:8001"))
 
-# Initialize BFA-managed MCP Server representing MDBank Resources
+# Initialize BFA-managed MCP Server representing MDBank Core Banking Resources
 mcp_server = BFAMCP("MDBank")
+
+@mcp_server.tool(
+    name="abrir_cuenta_bancaria",
+    description="Simulate opening a new official MDBank account (checking or savings) with IBAN, account number, agency, and initial balance.",
+    tags=["account", "open", "create", "checking", "savings", "bank", "abrir cuenta"],
+    examples=[
+        "open a checking account for John Doe with CPF 12345678900",
+        "create a new savings account",
+        "open bank account with initial deposit"
+    ]
+)
+async def abrir_cuenta_bancaria(nombre: str, cpf: str, tipo_cuenta: str = "Checking Account", deposito_inicial: float = 1000.0) -> dict:
+    """
+    Simulates core banking registration for a new bank account.
+    Returns structured JSON with IBAN, Agency, Account Number, and Balance.
+    """
+    account_number = f"{random.randint(1000, 9999)}-{random.randint(10, 99)}"
+    agency = "0001"
+    clean_acc = account_number.replace("-", "")
+    iban = f"MDBK0001000{clean_acc}"
+    
+    return {
+        "status": "SUCCESS",
+        "message": f"Bank account successfully opened at MDBank for {nombre}.",
+        "details": {
+            "holder_name": nombre,
+            "cpf": cpf,
+            "agency": agency,
+            "account_number": account_number,
+            "account_type": tipo_cuenta,
+            "initial_balance": f"R$ {deposito_inicial:,.2f}",
+            "iban": iban,
+            "status": "ACTIVE"
+        }
+    }
+
 
 @mcp_server.tool(
     name="consultar_cuenta",
@@ -16,8 +53,10 @@ mcp_server = BFAMCP("MDBank")
     examples=["verificar si tengo una cuenta activa", "buscar mi cuenta bancaria por CPF", "consultar conta do cliente"]
 )
 async def consultar_cuenta(cpf: str) -> str:
-    # Mock data lookup
-    return f"Cuenta activa para CPF: {cpf}. Saldo actual: 1200.50 BRL."
+    """
+    Look up existing account details by customer CPF.
+    """
+    return f"Active account found for CPF: {cpf}. Current balance: R$ 1,200.50."
 
 
 @mcp_server.tool(
@@ -27,7 +66,10 @@ async def consultar_cuenta(cpf: str) -> str:
     examples=["quiero ver mi tarjeta de credito", "consultar limite de tarjeta", "buscar cartao de credito"]
 )
 async def consultar_tarjeta(cpf: str) -> str:
-    return f"Tarjeta de crédito MDBank para CPF: {cpf}. Límite aprobado: 5000.00 BRL."
+    """
+    Query approved credit card details and limit by customer CPF.
+    """
+    return f"MDBank Credit Card for CPF: {cpf}. Approved limit: R$ 5,000.00."
 
 
 @mcp_server.tool(
@@ -37,7 +79,10 @@ async def consultar_tarjeta(cpf: str) -> str:
     examples=["quiero abrir una cuenta bancaria", "registrarme como cliente nuevo", "abrir conta no banco"]
 )
 async def crear_o_buscar_cuenta(nombre: str, cpf: str) -> str:
-    return f"Cuenta creada con éxito para {nombre} (CPF: {cpf}). Número: 987654."
+    """
+    Register or look up a bank customer account.
+    """
+    return f"Account successfully registered/found for {nombre} (CPF: {cpf}). Account Number: 987654."
 
 
 @mcp_server.tool(
@@ -47,7 +92,10 @@ async def crear_o_buscar_cuenta(nombre: str, cpf: str) -> str:
     examples=["quiero pedir una tarjeta de credito", "solicitar plastico para mi cuenta", "pedir cartao novo"]
 )
 async def solicitar_tarjeta(cpf: str, tipo: str) -> str:
-    return f"Solicitud de tarjeta tipo '{tipo}' procesada correctamente para el CPF: {cpf}."
+    """
+    Process new physical/digital credit card issuance request.
+    """
+    return f"Credit card request of type '{tipo}' processed successfully for CPF: {cpf}."
 
 
 # Start registration helper on startup asynchronously

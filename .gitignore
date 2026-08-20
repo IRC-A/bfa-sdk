@@ -1,54 +1,76 @@
-# Environment & secret files
-.env
-.env.*
-*.env
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Python virtual environments
+# Virtual environments
 .venv/
 venv/
 ENV/
 env/
-*.pyc
-__pycache__/
-*.egg-info/
-dist/
-build/
-.pytest_cache/
-.mypy_cache/
 
-# Local databases/persistences
-bfa_registry_db.json
-registered_endpoints.json
-
-# Node/React frontend
-examples/frontend/node_modules/
-examples/frontend/build/
-examples/frontend/.pnp/
-examples/frontend/.pnp.js
-examples/frontend/coverage/
-examples/frontend/.env.local
-examples/frontend/.env.development.local
-examples/frontend/.env.test.local
-examples/frontend/.env.production.local
+# Node.js & NPM dependencies
+node_modules/
+**/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# OS files
+# Build outputs
+n8n-nodes-bfa/dist/
+examples/frontend/build/
+examples/frontend/dist/
+
+# Local database / registry persistence
+bfa_registry_db.json
+*.db
+*.sqlite3
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+
+# Test & coverage
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
-crash.log
-crash.*.log
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-.terraformrc
-terraform.rc
 
+# IDEs
+.vscode/
+.idea/
+*.swp
