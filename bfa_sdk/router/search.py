@@ -1,2 +1,4 @@
-# Backward compatibility wrapper for irca_sdk
-from irca_sdk.router.search import *
+import sys
+import irca_sdk.router.search as _target
+
+sys.modules[__name__] = _target

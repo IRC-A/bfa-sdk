@@ -1,2 +1,4 @@
-# Backward compatibility wrapper for irca_sdk
-from irca_sdk.config import *
+import sys
+import irca_sdk.config as _target
+
+sys.modules[__name__] = _target

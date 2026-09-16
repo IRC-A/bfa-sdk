@@ -1,2 +1,4 @@
-# Backward compatibility wrapper for irca_sdk
-from irca_sdk.core.mcp import *
+import sys
+import irca_sdk.core.mcp as _target
+
+sys.modules[__name__] = _target
