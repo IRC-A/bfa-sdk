@@ -39,7 +39,7 @@ print("================================================================ algorith
 
 os.environ["BFA_GATEWAY_URL"] = "http://127.0.0.1:8000"
 
-from bfa_sdk.core.gateway import create_gateway_app
+from irca_sdk.core.gateway import create_gateway_app
 
 # Instantiate complete Gateway App with full UI, Observability, and Live Transaction Logs
 app = create_gateway_app()

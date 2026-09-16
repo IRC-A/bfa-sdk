@@ -1,16 +1,27 @@
-# Copyright (c) 2026 Sandro G. All rights reserved.
-# Licensed under AGPLv3 / Commercial Dual License.
-# Backend for Agents SDK (BFA)
-# Version 0.3.0
+# Copyright (c) 2026 Sandro Garcia. All rights reserved.
+# Backward Compatibility Shim for bfa_sdk -> irca_sdk
 """
-BFA SDK: A lightweight framework for Backend for Agents (BFA) architecture with FAISS semantic routing.
+bfa_sdk: Backward compatibility wrapper for irca_sdk.
+Please import directly from `irca_sdk` for new projects.
 """
+from irca_sdk import (
+    IRCAAgent,
+    IRCAMCP,
+    IRCAInteractiveAgent,
+    BFAAgent,
+    BFAMCP,
+    BFAInteractiveAgent,
+    create_gateway_app,
+    BFASemanticRouter
+)
 
-
-from bfa_sdk.core.agent import BFAAgent
-from bfa_sdk.core.interactive_agent import BFAInteractiveAgent
-from bfa_sdk.core.mcp import BFAMCP
-from bfa_sdk.core.gateway import create_gateway_app
-from bfa_sdk.router.search import BFASemanticRouter
-
-__all__ = ["BFAAgent", "BFAInteractiveAgent", "BFAMCP", "create_gateway_app", "BFASemanticRouter"]
+__all__ = [
+    "IRCAAgent",
+    "IRCAMCP",
+    "IRCAInteractiveAgent",
+    "BFAAgent",
+    "BFAMCP",
+    "BFAInteractiveAgent",
+    "create_gateway_app",
+    "BFASemanticRouter"
+]

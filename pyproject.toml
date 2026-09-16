@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bfa-irc-a-sdk"
+name = "irca-sdk"
 version = "0.3.0"
-description = "A generic Backend for Agents (BFA) SDK with FAISS semantic routing."
+description = "Official Python SDK for the IRC-A (Internet Relay Chat for Agents) protocol with FAISS semantic routing."
 readme = "README.md"
 authors = [
     { name = "Sandro Garcia" }
@@ -39,11 +39,11 @@ local = [
 ]
 
 [project.scripts]
-irc-a-gateway = "bfa_sdk.core.gateway:main"
+irc-a-gateway = "irca_sdk.core.gateway:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["bfa_sdk*"]
+include = ["irca_sdk*", "bfa_sdk*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
