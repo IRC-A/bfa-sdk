@@ -421,6 +421,12 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         allow_headers=["*"],
     )
     
+    @app.get("/health")
+    @app.get("/healthz")
+    async def gateway_health():
+        """Standard container health check endpoint."""
+        return {"status": "healthy", "service": "irc-a-gateway"}
+
     @app.get("/skills")
     async def get_skills():
         await prune_dead_endpoints()
