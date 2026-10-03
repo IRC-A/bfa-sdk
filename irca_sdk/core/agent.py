@@ -444,14 +444,157 @@ class IRCAAgent(abc.ABC):
                         timeout=5
                     )
                     if res_simple.status_code == 200:
-                        print(f"BFAAgent: Successfully registered '{self.agent_id}' via simple registration fallback.")
+                        print(f"IRCAAgent: Successfully registered '{self.agent_id}' via simple registration fallback.")
                         return True
                     else:
-                        print(f"BFAAgent Error: Registration fallback failed with status {res_simple.status_code}: {res_simple.text}")
+                        print(f"IRCAAgent Error: Registration fallback failed with status {res_simple.status_code}: {res_simple.text}")
                         return False
             except Exception as ex:
-                print(f"BFAAgent Error: Failed to connect to Gateway fallback at {fallback_url}: {ex}")
+                print(f"IRCAAgent Error: Failed to connect to Gateway fallback at {fallback_url}: {ex}")
                 return False
+
+    async def discover_capability(
+        self,
+        intent: str,
+        candidates: int = 1,
+        threshold: Optional[float] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Phase 1 - Capability Inquiry (IRC-A Protocol v1.3.0).
+        Pure, stateless, cacheable lookup.
+        Asks the network: 'who can solve this, and what do they need?'
+        The Gateway returns the matched capability metadata and its declared input_schema.
+        """
+        if not self.gateway_url:
+            raise ValueError("IRCAAgent: gateway_url is not configured.")
+
+        # Ensure session token is present
+        if not self.session_token:
+            await self.register_with_gateway(self.gateway_url)
+
+        discover_url = f"{self.gateway_url.rstrip('/')}/discover"
+        payload = {
+            "intent": intent,
+            "query": intent,
+            "candidates": candidates,
+            "session_token": self.session_token,
+            "exclude_node_id": self.agent_id
+        }
+        if threshold is not None:
+            payload["threshold"] = threshold
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(discover_url, json=payload)
+            if res.status_code == 404:
+                return None
+            if res.status_code == 200:
+                data = res.json()
+                return data.get("match") or data
+            raise RuntimeError(f"IRCAAgent discover_capability failed ({res.status_code}): {res.text}")
+
+    async def authorize_execution(
+        self,
+        intent: str,
+        tool: str,
+        args: Dict[str, Any],
+        idempotency_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Phase 2 - Authorization (IRC-A Protocol v1.3.0).
+        Presents intent + concrete arguments.
+        The Gateway re-evaluates channel masking and mints the ephemeral DET
+        with restricted_params cryptographically locked to args.
+        """
+        if not self.gateway_url:
+            raise ValueError("IRCAAgent: gateway_url is not configured.")
+
+        if not self.session_token:
+            await self.register_with_gateway(self.gateway_url)
+
+        auth_url = f"{self.gateway_url.rstrip('/')}/authorize"
+        payload = {
+            "intent": intent,
+            "tool": tool,
+            "args": args,
+            "session_token": self.session_token,
+            "exclude_node_id": self.agent_id
+        }
+        headers = {}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(auth_url, json=payload, headers=headers)
+            if res.status_code == 200:
+                return res.json()
+            raise RuntimeError(f"IRCAAgent authorize_execution failed ({res.status_code}): {res.text}")
+
+    async def call_peer_p2p(
+        self,
+        endpoint: str,
+        tool_or_action: str,
+        args: Dict[str, Any],
+        det: str,
+        is_tool: bool = True
+    ) -> Any:
+        """
+        Direct Peer-to-Peer mTLS / HTTP invocation to target node presenting the signed DET token.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if is_tool:
+                tools_url = endpoint.rstrip("/") + "/tools" if not endpoint.endswith("/tools") else endpoint
+                prepared_args = dict(args)
+                prepared_args["_det"] = det
+                prepared_args["delegated_token"] = det
+                res = await client.post(
+                    tools_url,
+                    json={"tool": tool_or_action, "arguments": prepared_args}
+                )
+                if res.status_code == 200:
+                    return res.json()
+                raise RuntimeError(f"Peer tool invocation failed ({res.status_code}): {res.text}")
+            else:
+                headers = {"Authorization": f"Bearer {det}", "x-irca-det": det}
+                res = await client.post(
+                    endpoint,
+                    json={"method": tool_or_action, "params": args},
+                    headers=headers
+                )
+                if res.status_code == 200:
+                    return res.json()
+                raise RuntimeError(f"Peer agent invocation failed ({res.status_code}): {res.text}")
+
+    async def invoke_capability(
+        self,
+        intent: str,
+        args: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """
+        End-to-End Orchestration helper:
+        1. Discovers capability schema (Phase 1).
+        2. Authorizes execution with arguments (Phase 2).
+        3. Invokes target node directly P2P.
+        """
+        match = await self.discover_capability(intent)
+        if not match:
+            raise RuntimeError(f"No capability found for intent '{intent}'")
+
+        tool_name = match.get("tool") or match.get("node_id")
+        endpoint = match.get("endpoint") or match.get("url")
+        is_tool = match.get("type") == "tool"
+
+        call_args = args or {}
+        auth_info = await self.authorize_execution(intent=intent, tool=tool_name, args=call_args)
+        det = auth_info["det"]
+        target_endpoint = auth_info.get("endpoint") or endpoint
+
+        return await self.call_peer_p2p(
+            endpoint=target_endpoint,
+            tool_or_action=tool_name,
+            args=call_args,
+            det=det,
+            is_tool=is_tool
+        )
 
     def verify_incoming_det(self, delegated_token: str, expected_function: str, runtime_args: dict) -> bool:
         """

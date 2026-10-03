@@ -1201,5 +1201,171 @@ async def test_semantic_prompt_hash_integrity():
     assert agent.verify_incoming_det(det_valid, "SendMessage", {}) is False
 
 
+def test_two_phase_capability_negotiation():
+    """
+    Validates Two-Phase Capability Negotiation (IRC-A Protocol v1.3.0).
+    Phase 1: /discover -> returns capability match and declared input_schema (stateless).
+    Phase 2: /authorize -> presents arguments and mints ephemeral DET locked to args.
+    """
+    import bfa_sdk.core.gateway as gateway_mod
+    from bfa_sdk.core.gateway import create_gateway_app, GATEWAY_PRIVATE_KEY, GATEWAY_PUBLIC_KEY
+    from bfa_sdk.core.paseto import verify_paseto_v4_public
+
+    app = create_gateway_app()
+    with TestClient(app) as client:
+        # Register a tool capability with structured input_schema
+        gateway_mod.ROUTER.update_registry({
+            "aml-audit-tool": {
+                "name": "anti_money_laundering_audit",
+                "description": "Performs AML compliance audits on customer accounts",
+                "tags": ["aml", "audit", "compliance"],
+                "examples": ["Audit customer compliance"],
+                "type": "tool",
+                "server_url": "http://localhost:8090",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string", "description": "Customer ID"},
+                        "threshold_usd": {"type": "number", "default": 10000}
+                    },
+                    "required": ["customer_id"]
+                },
+                "channels": ["#compliance", "#public"]
+            }
+        })
+        gateway_mod.ROUTER.build_index()
+
+        # Mint session token for calling agent
+        import uuid
+        session_token = sign_paseto_v4_public(
+            {"jti": str(uuid.uuid4()), "sub": "credit-agent-01", "channels": ["#compliance"], "exp": int(time.time()) + 300},
+            GATEWAY_PRIVATE_KEY
+        )
+
+        # Phase 1: /discover inquiry
+        discover_res = client.post("/discover", json={
+            "intent": "I need to perform AML compliance audits on high risk accounts",
+            "session_token": session_token
+        })
+        assert discover_res.status_code == 200
+        disc_data = discover_res.json()
+        assert "match" in disc_data
+        match = disc_data["match"]
+        assert match["node_id"] == "aml-audit-tool"
+        assert match["tool"] == "anti_money_laundering_audit"
+        assert match["endpoint"] == "http://localhost:8090"
+        assert "input_schema" in match
+        assert "customer_id" in match["input_schema"]["properties"]
+
+        # Phase 2: /authorize with concrete arguments
+        auth_res = client.post("/authorize", json={
+            "intent": "I need to perform AML compliance audits on high risk accounts",
+            "tool": "anti_money_laundering_audit",
+            "args": {"customer_id": "882", "threshold_usd": 25000},
+            "session_token": session_token
+        })
+        assert auth_res.status_code == 200
+        auth_data = auth_res.json()
+        assert "det" in auth_data
+        assert auth_data["target_node_id"] == "aml-audit-tool"
+        assert auth_data["restricted_params"] == {"customer_id": "882", "threshold_usd": 25000}
+
+        # Verify the DET signature offline
+        decoded_det = verify_paseto_v4_public(auth_data["det"], GATEWAY_PUBLIC_KEY)
+        assert decoded_det["sub"] == "credit-agent-01"
+        assert decoded_det["aud"] == "aml-audit-tool"
+        assert decoded_det["permitted_action"] == "anti_money_laundering_audit"
+        assert decoded_det["restricted_params"] == {"customer_id": "882", "threshold_usd": 25000}
+
+
+@pytest.mark.anyio
+async def test_irca_agent_two_phase_methods(monkeypatch):
+    """
+    Tests IRCAAgent base class methods: discover_capability, authorize_execution, and call_peer_p2p.
+    """
+    from irca_sdk.core.agent import IRCAAgent
+
+    class DummyAgent(IRCAAgent):
+        async def run(self, user_message, context):
+            return "ok"
+
+    agent = DummyAgent(
+        agent_id="test-agent-p2p",
+        name="Test Agent P2P",
+        description="Test agent",
+        tags=["test"],
+        examples=["test"],
+        url="http://localhost:8000"
+    )
+    agent.session_token = "mock-token"
+    agent.gateway_url = "http://mock-gateway:8000"
+
+    # Mock httpx responses for discover_capability and authorize_execution
+    import httpx
+
+    async def mock_post(url, json=None, headers=None, **kwargs):
+        class MockResponse:
+            def __init__(self, status_code, data):
+                self.status_code = status_code
+                self._data = data
+                self.text = "mock"
+            def json(self):
+                return self._data
+
+        if "/discover" in url:
+            return MockResponse(200, {
+                "match": {
+                    "node_id": "test-tool",
+                    "tool": "audit_account",
+                    "endpoint": "http://mock-peer:8080",
+                    "type": "tool",
+                    "input_schema": {"properties": {"acc": {"type": "string"}}}
+                }
+            })
+        elif "/authorize" in url:
+            return MockResponse(200, {
+                "det": "v4.public.mock-det",
+                "endpoint": "http://mock-peer:8080",
+                "target_node_id": "test-tool",
+                "restricted_params": json.get("args", {})
+            })
+        elif "/tools" in url:
+            return MockResponse(200, {"status": "success", "result": "audit_passed"})
+        return MockResponse(404, {})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    # 1. Test Phase 1 discovery
+    match = await agent.discover_capability("audit account 123")
+    assert match is not None
+    assert match["node_id"] == "test-tool"
+    assert match["tool"] == "audit_account"
+    assert "input_schema" in match
+
+    # 2. Test Phase 2 authorization
+    auth = await agent.authorize_execution(
+        intent="audit account 123",
+        tool="audit_account",
+        args={"acc": "123"}
+    )
+    assert auth["det"] == "v4.public.mock-det"
+    assert auth["restricted_params"] == {"acc": "123"}
+
+    # 3. Test P2P Call
+    result = await agent.call_peer_p2p(
+        endpoint="http://mock-peer:8080",
+        tool_or_action="audit_account",
+        args={"acc": "123"},
+        det="v4.public.mock-det",
+        is_tool=True
+    )
+    assert result == {"status": "success", "result": "audit_passed"}
+
+    # 4. Test High-Level invoke_capability
+    res_high = await agent.invoke_capability("audit account 123", args={"acc": "123"})
+    assert res_high == {"status": "success", "result": "audit_passed"}
+
+
+
 
 

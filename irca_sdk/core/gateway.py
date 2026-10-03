@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Sandro G. All rights reserved.
 # Licensed under AGPLv3 / Commercial Dual License.
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, Query, HTTPException, Request, Header
 from fastapi.responses import HTMLResponse, JSONResponse
 from contextlib import asynccontextmanager
 import httpx
@@ -1554,17 +1554,18 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
 
     @app.post("/discover")
-    def discover(query: str = None, threshold: float = None, exclude_node_id: str = None, payload: Dict[str, Any] = None):
+    def discover(query: str = None, intent: str = None, candidates: int = 1, threshold: float = None, exclude_node_id: str = None, payload: Dict[str, Any] = None):
         """
-        Secure semantic discovery (IRC-A Gateway broker).
-        Verifies session token, performs logical channel masking, excludes calling node ID if requested, and mints an ephemeral DET.
+        Phase 1 - Capability Inquiry (IRC-A Protocol v1.3.0).
+        Stateless lookup: Asks 'who can solve this, and what parameters do they need?'.
+        Returns matching capability metadata with its declared input_schema.
         """
         if payload is None:
             payload = {}
             
-        actual_query = query or payload.get("query")
+        actual_query = intent or query or payload.get("intent") or payload.get("query")
         if not actual_query:
-            raise HTTPException(status_code=400, detail="Missing query parameter or payload JSON")
+            raise HTTPException(status_code=400, detail="Missing 'intent' or 'query' parameter in request")
 
         auth_header = payload.get("session_token")
         if not auth_header:
@@ -1585,11 +1586,12 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="Gateway not ready")
             
         effective_exclude_id = exclude_node_id or payload.get("exclude_node_id") or caller_id
-            
         req_threshold = threshold if threshold is not None else (payload.get("threshold") if payload.get("threshold") is not None else CONFIG.semantic_threshold)
+        req_candidates = candidates if candidates and candidates > 1 else payload.get("candidates", 1)
 
         result = ROUTER.resolve(
             actual_query, 
+            top_k=req_candidates,
             threshold=req_threshold,
             agent_channels=caller_channels, 
             exclude_node_id=effective_exclude_id
@@ -1601,8 +1603,36 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         target_node_id = best["skill"]
         target_type = best["type"]
+        target_url = best["data"].get("url") or best["data"].get("server_url")
+        tool_name = best["data"].get("name", target_node_id)
+        input_schema = best["data"].get("input_schema", {})
+        description = best["data"].get("description", "")
         
-        # Extract restricted parameters dynamically using the configured extractors, incoming payload, or schema matching
+        # Build clean Phase 1 match object
+        match_obj = {
+            "node_id": target_node_id,
+            "tool": tool_name,
+            "endpoint": target_url,
+            "type": target_type,
+            "description": description,
+            "input_schema": input_schema
+        }
+
+        # Candidate list if multiple requested
+        candidates_list = []
+        for cand in result.get("candidates", []):
+            c_data = cand.get("data", {})
+            candidates_list.append({
+                "node_id": cand.get("skill"),
+                "tool": c_data.get("name", cand.get("skill")),
+                "endpoint": c_data.get("url") or c_data.get("server_url"),
+                "type": cand.get("type"),
+                "score": cand.get("score"),
+                "description": c_data.get("description", ""),
+                "input_schema": c_data.get("input_schema", {})
+            })
+
+        # Extract restricted parameters dynamically if present for legacy callers
         restricted_params = {}
         if payload:
             if "restricted_params" in payload and isinstance(payload["restricted_params"], dict):
@@ -1613,35 +1643,9 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         import re
         for param_name, pattern in DYNAMIC_PARAMETER_EXTRACTORS.items():
             if param_name not in restricted_params:
-                match = re.search(pattern, query, re.IGNORECASE)
+                match = re.search(pattern, actual_query, re.IGNORECASE)
                 if match:
                     restricted_params[param_name] = match.group(1)
-
-        # Heuristic parameter extraction from query if no params were explicitly passed in payload
-        if not restricted_params:
-            schema_props = best["data"].get("input_schema", {}).get("properties", {})
-        # Advanced parameter extraction for dates, ranges, and queries
-        if not restricted_params:
-            schema_props = best["data"].get("input_schema", {}).get("properties", {})
-            
-            # Extract date ranges (e.g. "del 28 al 31 de Julio" or "desde 2026-07-28 hasta 2026-07-31")
-            date_range_match = re.search(r'(?:del|desde)\s+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}|[0-9]{1,2}\s+(?:de\s+)?[a-zA-Z]+|\d+)\s+(?:al|hasta|a)\s+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}|[0-9]{1,2}\s+(?:de\s+)?[a-zA-Z]+|\d+)', query, re.IGNORECASE)
-            if date_range_match:
-                if "desde" in schema_props:
-                    restricted_params["desde"] = date_range_match.group(1).strip()
-                if "hasta" in schema_props:
-                    restricted_params["hasta"] = date_range_match.group(2).strip()
-            
-            if "nombre" in schema_props or "apellido" in schema_props or "phone" in schema_props or "query" in schema_props:
-                # Clean up query prefixes to isolate entity names
-                clean_q = re.sub(r'^(buscar|consultar|ver|obtener|find|search|buscar_contactos|contactos|crm)\s+', '', query, flags=re.IGNORECASE).strip()
-                words = clean_q.split()
-                if "nombre" in schema_props and len(words) >= 1:
-                    restricted_params["nombre"] = words[0]
-                if "apellido" in schema_props and len(words) >= 2:
-                    restricted_params["apellido"] = " ".join(words[1:])
-                elif "query" in schema_props:
-                    restricted_params["query"] = clean_q
 
         # Retrieve prompt_hash if registered for target node
         target_prompt_hash = REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash")
@@ -1649,13 +1653,13 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             target_prompt_hash = best["data"].get("prompt_hash")
 
         import uuid
-        det_expiry = int(time.time()) + 60
+        det_expiry = int(time.time()) + 120
         det_claims = {
             "jti": str(uuid.uuid4()),
             "iss": "irca-gateway",
             "sub": caller_id,
             "aud": target_node_id,
-            "permitted_action": best["data"]["name"],
+            "permitted_action": tool_name,
             "restricted_params": restricted_params,
             "exp": det_expiry,
             "iat": int(time.time())
@@ -1668,10 +1672,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             GATEWAY_PRIVATE_KEY
         )
         
-        target_url = best["data"].get("url") or best["data"].get("server_url")
         base_tools_url = target_url.rstrip("/") + "/tools" if target_type == "tool" and not target_url.endswith("/tools") else target_url
 
-        # Build arguments for prepared execution call
         prepared_args = dict(restricted_params)
         prepared_args["delegated_token"] = det
 
@@ -1686,29 +1688,168 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "url": target_url,
             "method": "POST",
             "headers": {"Authorization": f"Bearer {det}"},
-            "body": {"query": query, "params": restricted_params}
+            "body": {"query": actual_query, "params": restricted_params}
         }
         
-        add_system_log("DISCOVERY", caller_id, f"Resolved query '{query}' -> target '{target_node_id}' ({target_url}). Mints DET token with restricted_params: {restricted_params}")
+        add_system_log("DISCOVERY", caller_id, f"Resolved intent '{actual_query}' -> target '{target_node_id}' ({target_url}).")
+        
         response_data = {
             "status": "success",
+            "match": match_obj,
+            "candidates": candidates_list,
+            # Legacy compatibility fields
             "det": det,
             "url": target_url,
             "target_node_id": target_node_id,
             "type": target_type,
-            "input_schema": best["data"].get("input_schema", {}),
+            "input_schema": input_schema,
             "restricted_params": restricted_params,
             "prepared_call": prepared_call
         }
-        print("\n" + "="*80)
-        print(f"=== [BFA GATEWAY /discover RESPUESTA EMITIDA] ===")
-        print(f"🔹 Caller ID       : {caller_id}")
-        print(f"🔹 Query           : {query}")
-        print(f"🔹 Target          : {target_node_id} ({target_type}) @ {target_url}")
-        print(f"🔹 Restricted Params: {json.dumps(restricted_params, ensure_ascii=False)}")
-        print(f"🔹 Prepared Call   : {json.dumps(prepared_call, ensure_ascii=False, indent=2)}")
-        print("="*80 + "\n")
         return response_data
+
+    @app.post("/authorize")
+    def authorize(
+        payload: Dict[str, Any] = None,
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+        authorization: Optional[str] = Header(None, alias="Authorization")
+    ):
+        """
+        Phase 2 - Authorization & DET Minting (IRC-A Protocol v1.3.0).
+        Presents intent + concrete arguments.
+        Re-evaluates channel masking and match, and mints an ephemeral DET
+        with restricted_params cryptographically locked to args.
+        """
+        if payload is None:
+            payload = {}
+
+        intent = payload.get("intent") or payload.get("query")
+        tool_name = payload.get("tool")
+        args = payload.get("args") or payload.get("restricted_params") or payload.get("params") or {}
+        if not isinstance(args, dict):
+            args = {}
+
+        if not intent and not tool_name:
+            raise HTTPException(status_code=400, detail="Missing 'intent' or 'tool' in authorization request")
+
+        auth_header = payload.get("session_token")
+        if not auth_header and authorization:
+            if authorization.lower().startswith("bearer "):
+                auth_header = authorization[7:].strip()
+            else:
+                auth_header = authorization.strip()
+
+        if not auth_header:
+            raise HTTPException(status_code=401, detail="Missing session_token or Authorization header")
+
+        try:
+            decoded_session = verify_paseto_v4_public(auth_header, GATEWAY_PUBLIC_KEY)
+            caller_id = decoded_session["sub"]
+            caller_channels = decoded_session.get("channels", ["#public"])
+            if decoded_session.get("exp", 0) < time.time():
+                raise HTTPException(status_code=401, detail="Session token expired")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Invalid session token: {e}")
+
+        if not ROUTER:
+            raise HTTPException(status_code=503, detail="Gateway not ready")
+
+        effective_exclude_id = payload.get("exclude_node_id") or caller_id
+
+        # Re-resolve capability or find direct tool match
+        target_item = None
+        target_node_id = None
+        target_type = "tool"
+        permitted_action = tool_name
+
+        if intent:
+            req_threshold = payload.get("threshold") if payload.get("threshold") is not None else CONFIG.semantic_threshold
+            result = ROUTER.resolve(
+                intent,
+                threshold=req_threshold,
+                agent_channels=caller_channels,
+                exclude_node_id=effective_exclude_id
+            )
+            best = result.get("best")
+            if best:
+                target_node_id = best["skill"]
+                target_type = best["type"]
+                target_item = best["data"]
+                permitted_action = best["data"].get("name", target_node_id)
+
+        # Fallback: direct lookup if tool_name is provided
+        if not target_item and tool_name and tool_name in ROUTER.registry:
+            reg_entry = ROUTER.registry[tool_name]
+            node_channels = reg_entry.get("channels", ["#public"])
+            if any(ch in caller_channels for ch in node_channels):
+                target_item = reg_entry
+                target_node_id = tool_name
+                target_type = reg_entry.get("type", "tool")
+                permitted_action = reg_entry.get("name", tool_name)
+
+        if not target_item:
+            add_system_log("AUTHORIZATION", caller_id, f"Authorization failed: No authorized capability matched intent '{intent}' / tool '{tool_name}'")
+            raise HTTPException(status_code=404, detail="No matching authorized capability found")
+
+        target_url = target_item.get("url") or target_item.get("server_url")
+        target_prompt_hash = REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash") or target_item.get("prompt_hash")
+
+        import uuid
+        det_expiry = int(time.time()) + 120
+        det_claims = {
+            "jti": str(uuid.uuid4()),
+            "iss": "irca-gateway",
+            "sub": caller_id,
+            "aud": target_node_id,
+            "permitted_action": permitted_action,
+            "restricted_params": args,
+            "exp": det_expiry,
+            "iat": int(time.time())
+        }
+        if target_prompt_hash:
+            det_claims["expected_prompt_hash"] = target_prompt_hash
+
+        det = sign_paseto_v4_public(
+            det_claims,
+            GATEWAY_PRIVATE_KEY
+        )
+
+        base_tools_url = target_url.rstrip("/") + "/tools" if target_type == "tool" and not target_url.endswith("/tools") else target_url
+
+        prepared_args = dict(args)
+        prepared_args["delegated_token"] = det
+
+        prepared_call = {
+            "url": base_tools_url,
+            "method": "POST",
+            "body": {
+                "tool": target_node_id,
+                "arguments": prepared_args
+            }
+        } if target_type == "tool" else {
+            "url": target_url,
+            "method": "POST",
+            "headers": {"Authorization": f"Bearer {det}"},
+            "body": {"query": intent or tool_name, "params": args}
+        }
+
+        add_system_log("AUTHORIZATION", caller_id, f"Authorized execution for '{caller_id}' -> target '{target_node_id}' with restricted_params: {args}")
+
+        return {
+            "status": "success",
+            "det": det,
+            "endpoint": target_url,
+            "url": target_url,
+            "target_node_id": target_node_id,
+            "tool": permitted_action,
+            "type": target_type,
+            "restricted_params": args,
+            "expires_in": 120,
+            "prepared_call": prepared_call
+        }
+
  
     @app.post("/mint")
     def mint_token(payload: Dict[str, Any]):
