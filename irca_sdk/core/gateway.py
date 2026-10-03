@@ -1373,22 +1373,59 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                                 `).join('');
                             }
                             
-                            // Render tools
+                            // Render tools grouped by MCP Server / Node
                             if (tools.length === 0) {
                                 toolsContainer.innerHTML = '<div class="no-nodes">No dynamic MCP servers registered.</div>';
                             } else {
-                                toolsContainer.innerHTML = tools.map(([name, item]) => `
-                                    <div class="node-card">
-                                        <div class="node-header">
-                                            <div class="node-name" style="font-family: 'JetBrains Mono', monospace;">${name}</div>
-                                            <span class="node-badge badge-tool">MCP Tool</span>
+                                const mcpServers = {};
+                                tools.forEach(([name, item]) => {
+                                    const serverUrl = item.server_url || item.url || "http://unknown-mcp-server";
+                                    const nodeId = item.node_id || serverUrl;
+                                    
+                                    if (!mcpServers[nodeId]) {
+                                        mcpServers[nodeId] = {
+                                            node_id: nodeId,
+                                            url: serverUrl,
+                                            channels: item.channels || ["#public"],
+                                            tools: []
+                                        };
+                                    }
+                                    mcpServers[nodeId].tools.push([name, item]);
+                                });
+                                
+                                toolsContainer.innerHTML = Object.values(mcpServers).map(server => `
+                                    <div class="mcp-server-group" style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 10px;">
+                                            <div>
+                                                <div style="font-size: 0.95rem; font-weight: 700; color: #60a5fa; font-family: 'Outfit', sans-serif; display: flex; align-items: center; gap: 8px;">
+                                                    <span>🖥️ ${server.node_id}</span>
+                                                </div>
+                                                <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 2px;">
+                                                    MCP SERVER: <span style="font-family: 'JetBrains Mono', monospace; color: #cbd5e1;">${server.url}</span>
+                                                </div>
+                                            </div>
+                                            <div style="display: flex; gap: 6px; align-items: center;">
+                                                <span class="node-badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.4);">
+                                                    ${server.tools.length} ${server.tools.length === 1 ? 'Tool' : 'Tools'}
+                                                </span>
+                                            </div>
                                         </div>
-                                        <div class="node-desc">${item.description || 'No description'}</div>
-                                        <div class="node-tags">
-                                            ${(item.tags || []).map(t => `<span class="node-tag">#${t}</span>`).join('')}
-                                        </div>
-                                        <div class="node-footer">
-                                            MCP SERVER: <span>${item.url || item.server_url || ''}</span>
+                                        
+                                        <div class="mcp-tools-list" style="display: flex; flex-direction: column; gap: 12px;">
+                                            ${server.tools.map(([name, item]) => `
+                                                <div class="node-card" style="background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.08); margin: 0;">
+                                                    <div class="node-header">
+                                                        <div class="node-name" style="font-family: 'JetBrains Mono', monospace; color: #f8fafc;">${name}</div>
+                                                        <span class="node-badge badge-tool">MCP TOOL</span>
+                                                    </div>
+                                                    <div class="node-desc">${item.description || 'No description'}</div>
+                                                    ${(item.tags && item.tags.length > 0) ? `
+                                                        <div class="node-tags">
+                                                            ${item.tags.map(t => `<span class="node-tag">#${t}</span>`).join('')}
+                                                        </div>
+                                                    ` : ''}
+                                                </div>
+                                            `).join('')}
                                         </div>
                                     </div>
                                 `).join('');

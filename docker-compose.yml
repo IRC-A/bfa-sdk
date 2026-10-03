@@ -13,7 +13,6 @@ services:
       # Enable OpenAI embeddings for semantic FAISS search
       - BFA_USE_MOCK_EMBEDDINGS=false
       - BFA_USE_OPENAI_EMBEDDINGS=true
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       # Mounts registry database to persist registered agents and tools across restarts
       - ./bfa_registry_db.json:/app/bfa_registry_db.json
