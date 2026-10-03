@@ -1207,9 +1207,11 @@ def test_two_phase_capability_negotiation():
     Phase 1: /discover -> returns capability match and declared input_schema (stateless).
     Phase 2: /authorize -> presents arguments and mints ephemeral DET locked to args.
     """
+    import time
+    import uuid
     import bfa_sdk.core.gateway as gateway_mod
     from bfa_sdk.core.gateway import create_gateway_app, GATEWAY_PRIVATE_KEY, GATEWAY_PUBLIC_KEY
-    from bfa_sdk.core.paseto import verify_paseto_v4_public
+    from bfa_sdk.core.paseto import verify_paseto_v4_public, sign_paseto_v4_public
 
     app = create_gateway_app()
     with TestClient(app) as client:
@@ -1236,7 +1238,6 @@ def test_two_phase_capability_negotiation():
         gateway_mod.ROUTER.build_index()
 
         # Mint session token for calling agent
-        import uuid
         session_token = sign_paseto_v4_public(
             {"jti": str(uuid.uuid4()), "sub": "credit-agent-01", "channels": ["#compliance"], "exp": int(time.time()) + 300},
             GATEWAY_PRIVATE_KEY
@@ -1303,7 +1304,7 @@ async def test_irca_agent_two_phase_methods(monkeypatch):
     # Mock httpx responses for discover_capability and authorize_execution
     import httpx
 
-    async def mock_post(url, json=None, headers=None, **kwargs):
+    async def mock_post(self_client, url, json=None, headers=None, **kwargs):
         class MockResponse:
             def __init__(self, status_code, data):
                 self.status_code = status_code
