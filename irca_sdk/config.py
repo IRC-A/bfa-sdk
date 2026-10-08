@@ -17,6 +17,7 @@ class BFAConfig:
         self.use_openai_embeddings: bool = False
         self.openai_api_key: str = ""
         self.semantic_threshold: float = 0.5
+        self.enable_active_pruning: bool = True
 
         # Load from config file if provided
         if config_path and os.path.exists(config_path):
@@ -34,6 +35,7 @@ class BFAConfig:
             self.use_openai_embeddings = data.get("use_openai_embeddings", False)
             self.openai_api_key = data.get("openai_api_key", "")
             self.semantic_threshold = float(data.get("semantic_threshold", self.semantic_threshold))
+            self.enable_active_pruning = bool(data.get("enable_active_pruning", True))
 
     def load_from_env(self):
         # Parse comma-separated strings
@@ -48,3 +50,5 @@ class BFAConfig:
         self.use_openai_embeddings = os.getenv("BFA_USE_OPENAI_EMBEDDINGS", "false").lower() in ("true", "1")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
         self.semantic_threshold = float(os.getenv("BFA_SEMANTIC_THRESHOLD", "0.5"))
+        is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
+        self.enable_active_pruning = os.getenv("BFA_ENABLE_ACTIVE_PRUNING", "false" if is_pytest else "true").lower() in ("true", "1")

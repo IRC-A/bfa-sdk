@@ -601,7 +601,7 @@ class IRCAAgent(abc.ABC):
         Offline Decentralized Verification performed locally by the agent node.
         Validates the BFA-Gateway signature and enforces parameter lock-down.
         """
-        if not self.gateway_public_key:
+        def _fetch_pubkey():
             if self.gateway_url:
                 try:
                     import httpx
@@ -615,12 +615,20 @@ class IRCAAgent(abc.ABC):
                 except Exception as ex:
                     print(f"BFAAgent: Could not fetch gateway public key on the fly: {ex}")
 
-            if not self.gateway_public_key:
-                print("BFAAgent verify_incoming_det failed: gateway_public_key is missing")
-                return False
+        if not self.gateway_public_key:
+            _fetch_pubkey()
+
+        if not self.gateway_public_key:
+            print("BFAAgent verify_incoming_det failed: gateway_public_key is missing")
+            return False
 
         try:
-            decoded_det = verify_paseto_v4_public(delegated_token, self.gateway_public_key)
+            try:
+                decoded_det = verify_paseto_v4_public(delegated_token, self.gateway_public_key)
+            except Exception:
+                # Gateway might have restarted with new ephemeral key pair; refresh and retry
+                _fetch_pubkey()
+                decoded_det = verify_paseto_v4_public(delegated_token, self.gateway_public_key)
             
             # Clock skew validation (5s tolerance)
             exp = decoded_det.get("exp", 0)

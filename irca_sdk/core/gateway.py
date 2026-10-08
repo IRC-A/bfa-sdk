@@ -248,10 +248,13 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
 
 async def prune_dead_endpoints():
     """
-    Actively pings all registered endpoints. If an agent or MCP server is unreachable, connection refused,
-    or timed out, automatically unregister it, purge it from FAISS, and persist the update.
+    Actively pings all registered endpoints. If an agent or MCP server is unreachable on TWO consecutive checks,
+    automatically unregister it, purge it from FAISS, and persist the update.
     """
-    if not ROUTER:
+    if not hasattr(prune_dead_endpoints, '_fail_counts'):
+        prune_dead_endpoints._fail_counts = {}
+    
+    if not ROUTER or not getattr(CONFIG, "enable_active_pruning", True):
         return
         
     urls_to_check = set()
@@ -268,26 +271,38 @@ async def prune_dead_endpoints():
         return
         
     dead_urls = set()
-    async with httpx.AsyncClient(timeout=2.0) as client:
+    async with httpx.AsyncClient(timeout=3.0) as client:
         for url in urls_to_check:
             try:
+                check_url = url.replace("host.docker.internal", "127.0.0.1") if not os.path.exists("/.dockerenv") else url
                 is_mcp = False
                 for item in ROUTER.registry.values():
-                    if item.get("server_url") == url or item.get("type") == "tool":
+                    if (item.get("server_url") == url or item.get("url") == url) and item.get("type") == "tool":
                         is_mcp = True
                         break
                 
                 if is_mcp:
-                    res = await client.get(f"{url.rstrip('/')}/tools")
+                    res = await client.get(f"{check_url.rstrip('/')}/tools")
+                    if res.status_code == 404:
+                        res = await client.get(f"{check_url.rstrip('/')}/")
                 else:
-                    res = await client.get(f"{url.rstrip('/')}/.well-known/agent-card.json")
+                    res = await client.get(f"{check_url.rstrip('/')}/.well-known/agent-card.json")
                     if res.status_code != 200:
-                        res = await client.get(f"{url.rstrip('/')}/")
+                        res = await client.get(f"{check_url.rstrip('/')}/health")
+                    if res.status_code != 200:
+                        res = await client.get(f"{check_url.rstrip('/')}/")
                         
                 if res.status_code >= 500:
-                    dead_urls.add(url)
+                    prune_dead_endpoints._fail_counts[url] = prune_dead_endpoints._fail_counts.get(url, 0) + 1
+                else:
+                    prune_dead_endpoints._fail_counts[url] = 0
             except Exception:
-                dead_urls.add(url)
+                prune_dead_endpoints._fail_counts[url] = prune_dead_endpoints._fail_counts.get(url, 0) + 1
+    
+    # Remove after 2 consecutive failures
+    for url, count in list(prune_dead_endpoints._fail_counts.items()):
+        if count >= 2:
+            dead_urls.add(url)
                 
     if dead_urls:
         removed_count = 0
@@ -312,6 +327,7 @@ async def prune_dead_endpoints():
             BFAStorageManager.save_registry(reg)
             
             add_system_log("DISCOVERY", dead_url, f"Endpoint '{dead_url}' is dead/unreachable. Automatically unindexed from FAISS.")
+            prune_dead_endpoints._fail_counts.pop(dead_url, None)
             
         if removed_count > 0 and ROUTER:
             ROUTER.build_index()
@@ -321,10 +337,13 @@ async def health_monitor_loop():
     """Background task to continuously monitor registered nodes and prune dead ones."""
     while True:
         try:
-            await asyncio.sleep(10)
             await prune_dead_endpoints()
+            await asyncio.sleep(10)
         except asyncio.CancelledError:
             break
+        except Exception as e:
+            print(f"Health monitor loop error: {e}")
+            await asyncio.sleep(10)
         except Exception as e:
             print(f"BFA Health Monitor Error: {e}")
 
@@ -450,23 +469,26 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         return registry
 
     @app.get("/resolve")
-    def resolve(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
+    async def resolve(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
+        await prune_dead_endpoints()
         eff_threshold = threshold if threshold is not None else CONFIG.semantic_threshold
         return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, exclude_node_id=exclude_node_id)
 
     @app.get("/resolve/agents")
-    def resolve_agents(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
+    async def resolve_agents(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
+        await prune_dead_endpoints()
         eff_threshold = threshold if threshold is not None else CONFIG.semantic_threshold
         return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, filter_type="agent", exclude_node_id=exclude_node_id)
 
     @app.get("/resolve/tools")
-    def resolve_tools(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
+    async def resolve_tools(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
+        await prune_dead_endpoints()
         eff_threshold = threshold if threshold is not None else CONFIG.semantic_threshold
         return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, filter_type="tool", exclude_node_id=exclude_node_id)
 
@@ -1597,7 +1619,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
 
     @app.post("/discover")
-    def discover(query: str = None, intent: str = None, candidates: int = 1, threshold: float = None, exclude_node_id: str = None, payload: Dict[str, Any] = None):
+    async def discover(query: str = None, intent: str = None, candidates: int = 1, threshold: float = None, exclude_node_id: str = None, payload: Dict[str, Any] = None):
         """
         Phase 1 - Capability Inquiry (IRC-A Protocol v1.3.0).
         Stateless lookup: Asks 'who can solve this, and what parameters do they need?'.
@@ -1627,6 +1649,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
+            
+        await prune_dead_endpoints()
             
         effective_exclude_id = exclude_node_id or payload.get("exclude_node_id") or caller_id
         req_threshold = threshold if threshold is not None else (payload.get("threshold") if payload.get("threshold") is not None else CONFIG.semantic_threshold)
@@ -1752,7 +1776,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         return response_data
 
     @app.post("/authorize")
-    def authorize(
+    async def authorize(
         payload: Dict[str, Any] = None,
         idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
         authorization: Optional[str] = Header(None, alias="Authorization")
@@ -1798,6 +1822,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
 
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
+
+        await prune_dead_endpoints()
 
         effective_exclude_id = payload.get("exclude_node_id") or caller_id
 
@@ -2093,6 +2119,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         """
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
+            
+        await prune_dead_endpoints()
             
         req_threshold = payload.get("threshold") if (payload and payload.get("threshold") is not None) else CONFIG.semantic_threshold
         result = ROUTER.resolve(query, threshold=req_threshold, filter_type="agent")

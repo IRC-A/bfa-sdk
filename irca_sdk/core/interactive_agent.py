@@ -31,7 +31,7 @@ class MemoryStack:
 
     def set_semantic_keys(self, session_id: str, keys: dict):
         session = self.get_session(session_id)
-        session["semantic_keys"].update(keys)
+        session["semantic_keys"] = dict(keys)
 
     def clear_session(self, session_id: str):
         if session_id in self.sessions:

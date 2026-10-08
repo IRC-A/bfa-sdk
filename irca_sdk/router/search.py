@@ -130,8 +130,12 @@ class BFASemanticRouter:
 
             # Filter by channel overlap (Logical Channel Masking)
             if agent_channels is not None:
-                item_channels = item.get("channels", ["#public"])
-                if not any(ch in item_channels for ch in agent_channels):
+                item_channels = item.get("channels") or ["#public"]
+                norm_agent_channels = {str(c).strip().lstrip("#").lower() for c in agent_channels if c}
+                norm_item_channels = {str(c).strip().lstrip("#").lower() for c in item_channels if c}
+                
+                is_public = not norm_item_channels or "public" in norm_item_channels or not norm_agent_channels or "public" in norm_agent_channels
+                if not is_public and not norm_agent_channels.intersection(norm_item_channels):
                     continue
 
             # Convert L2 distance squared to Cosine Similarity in [0.0, 1.0] range

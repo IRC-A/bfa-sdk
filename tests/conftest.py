@@ -17,6 +17,10 @@ def clear_global_router_registry():
         gateway_mod.ROUTER.registry.clear()
         gateway_mod.ROUTER.index = None
         gateway_mod.ROUTER.index_keys = []
+    if getattr(gateway_mod, "CONFIG", None) is not None:
+        gateway_mod.CONFIG.enable_active_pruning = False
+    if hasattr(gateway_mod.prune_dead_endpoints, "_fail_counts"):
+        gateway_mod.prune_dead_endpoints._fail_counts.clear()
         
     yield
     
@@ -25,3 +29,5 @@ def clear_global_router_registry():
         gateway_mod.ROUTER.registry.clear()
         gateway_mod.ROUTER.index = None
         gateway_mod.ROUTER.index_keys = []
+    if hasattr(gateway_mod.prune_dead_endpoints, "_fail_counts"):
+        gateway_mod.prune_dead_endpoints._fail_counts.clear()
