@@ -92,10 +92,13 @@ class BFAStorageManager:
                 print(f"BFAStorageManager: Error loading from DynamoDB: {e}")
                 return {"agent_endpoints": [], "mcp_endpoints": [], "version": 1}
         else:
-            if not os.path.exists(REGISTRY_DB_PATH):
+            db_path = REGISTRY_DB_PATH
+            if os.path.isdir(db_path):
+                db_path = os.path.join(db_path, "bfa_registry_db.json")
+            if not os.path.exists(db_path):
                 return {"agent_endpoints": [], "mcp_endpoints": [], "version": 1}
             try:
-                with open(REGISTRY_DB_PATH, "r") as f:
+                with open(db_path, "r") as f:
                     data = json.load(f)
                     return {
                         "agent_endpoints": data.get("agent_endpoints", []),
@@ -156,11 +159,14 @@ class BFAStorageManager:
             return False
         else:
             try:
+                db_path = REGISTRY_DB_PATH
+                if os.path.isdir(db_path):
+                    db_path = os.path.join(db_path, "bfa_registry_db.json")
                 file_data = {
                     "agent_endpoints": data.get("agent_endpoints", []),
                     "mcp_endpoints": data.get("mcp_endpoints", [])
                 }
-                with open(REGISTRY_DB_PATH, "w") as f:
+                with open(db_path, "w") as f:
                     json.dump(file_data, f, indent=2)
                 return True
             except Exception as e:
