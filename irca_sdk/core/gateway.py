@@ -2199,7 +2199,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 target_node_id = best["skill"]
                 target_type = best["type"]
                 target_item = best["data"]
-                permitted_action = best["data"].get("name", target_node_id)
+                permitted_action = "SendMessage" if target_type == "agent" else best["data"].get("name", target_node_id)
 
         # Fallback: direct lookup if tool_name is provided
         if not target_item and tool_name and tool_name in ROUTER.registry:
@@ -2209,7 +2209,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 target_item = reg_entry
                 target_node_id = tool_name
                 target_type = reg_entry.get("type", "tool")
-                permitted_action = reg_entry.get("name", tool_name)
+                permitted_action = "SendMessage" if target_type == "agent" else reg_entry.get("name", tool_name)
 
         if not target_item:
             add_system_log("AUTHORIZATION", caller_id, f"Authorization failed: No authorized capability matched intent '{intent}' / tool '{tool_name}'")
