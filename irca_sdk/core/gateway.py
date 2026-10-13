@@ -1598,6 +1598,13 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                         closeRegisterModal();
                         showRegStatus(`⏳ Registering ${req.type.toUpperCase()} at ${req.rawUrl}...`, false);
                         try {
+                            try {
+                                await fetch('/register/disconnect', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ node_id: req.rawUrl })
+                                });
+                            } catch (_) {}
                             const res = await fetch(req.fullApiUrl, { method: 'POST' });
                             const data = await res.json();
                             if (res.ok) {
@@ -1887,36 +1894,75 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         add_system_log("REGISTRATION", node_id, "Handshake verified. Session token generated successfully.")
         return {"session_token": session_token, "expiry": expiry}
 
+    def _normalize_local_url(u: str) -> str:
+        if not u:
+            return ""
+        norm = str(u).strip().rstrip("/")
+        for host in ("http://localhost", "http://host.docker.internal"):
+            if norm.startswith(host):
+                norm = "http://127.0.0.1" + norm[len(host):]
+        for host in ("https://localhost", "https://host.docker.internal"):
+            if norm.startswith(host):
+                norm = "https://127.0.0.1" + norm[len(host):]
+        return norm
+
+    def _remove_persisted_endpoint(url_to_remove: str):
+        if not url_to_remove:
+            return
+        try:
+            reg = BFAStorageManager.load_registry()
+            changed = False
+            for k in ("agent_endpoints", "mcp_endpoints"):
+                if url_to_remove in reg.get(k, []):
+                    reg[k].remove(url_to_remove)
+                    changed = True
+            if changed:
+                BFAStorageManager.save_registry(reg)
+        except Exception:
+            pass
+
     @app.post("/register/disconnect")
     def register_disconnect(payload: Dict[str, Any]):
         """
         Unregisters/disconnects a node from the Gateway registry and rebuilds the FAISS index.
         """
-        node_id = payload.get("node_id")
+        node_id = payload.get("node_id") or payload.get("url")
         if not node_id:
             raise HTTPException(status_code=400, detail="Missing node_id")
             
-        # 1. Remove from registered nodes list
-        if node_id in REGISTERED_NODES:
-            del REGISTERED_NODES[node_id]
+        norm_target = _normalize_local_url(node_id)
+        matched_node_ids = {node_id}
+
+        # 1. Remove from registered nodes list (matching node_id or normalized URL)
+        for reg_id, reg_info in list(REGISTERED_NODES.items()):
+            reg_url = reg_info.get("url") or ""
+            if reg_id == node_id or reg_url == node_id or (norm_target and reg_url and _normalize_local_url(reg_url) == norm_target):
+                matched_node_ids.add(reg_id)
+                if reg_url:
+                    _remove_persisted_endpoint(reg_url)
+                del REGISTERED_NODES[reg_id]
             
         # 2. Remove associated capabilities from semantic search registry
         keys_to_remove = []
-        for key, value in list(ROUTER.registry.items()):
-            if (key == node_id or 
-                value.get("node_id") == node_id or 
-                value.get("url") == node_id or 
-                value.get("server_url") == node_id):
-                keys_to_remove.append(key)
-            elif value.get("type") == "agent" and key.startswith(node_id):
-                keys_to_remove.append(key)
-                
-        for k in keys_to_remove:
-            if k in ROUTER.registry:
-                del ROUTER.registry[k]
-                
-        # Rebuild FAISS index
         if ROUTER:
+            for key, value in list(ROUTER.registry.items()):
+                val_url = value.get("url") or value.get("server_url") or ""
+                val_node = value.get("node_id") or ""
+                if (key in matched_node_ids or 
+                    val_node in matched_node_ids or 
+                    val_url in matched_node_ids or 
+                    (norm_target and val_url and _normalize_local_url(val_url) == norm_target)):
+                    keys_to_remove.append(key)
+                    if val_url:
+                        _remove_persisted_endpoint(val_url)
+                elif value.get("type") == "agent" and any(key.startswith(m_id) for m_id in matched_node_ids):
+                    keys_to_remove.append(key)
+                    
+            for k in keys_to_remove:
+                if k in ROUTER.registry:
+                    del ROUTER.registry[k]
+                    
+            # Rebuild FAISS index
             ROUTER.build_index()
             
         add_system_log("REGISTRATION", node_id, f"Node successfully disconnected. Removed {len(keys_to_remove)} capabilities from FAISS.")
@@ -2282,46 +2328,62 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for Agent at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover agent at {url}")
             
-        # Check collision: Is the URL used by a DIFFERENT node?
+        norm_url = _normalize_local_url(url)
         current_target_id = node_id or (list(new_agents.keys())[0] if new_agents else None)
-        for reg_id, reg_info in REGISTERED_NODES.items():
-            if reg_info.get("url") == url:
-                if reg_id != current_target_id and reg_id not in new_agents:
+
+        # Check collision only when an explicit conflicting node_id is provided
+        if node_id is not None:
+            for reg_id, reg_info in REGISTERED_NODES.items():
+                if reg_info.get("url") == url and reg_id != current_target_id:
                     raise HTTPException(
                         status_code=409, 
                         detail=f"Agent URL '{url}' is already registered by node '{reg_id}'"
                     )
+            for skill_id, new_item in new_agents.items():
+                for existing_id, existing_item in ROUTER.registry.items():
+                    existing_node = existing_item.get("node_id") or existing_id
+                    existing_url = existing_item.get("url") or ""
+                    if existing_node != node_id and _normalize_local_url(existing_url) != norm_url and (
+                        existing_item.get("name") == new_item.get("name") and
+                        existing_item.get("description") == new_item.get("description")
+                    ):
+                        raise HTTPException(
+                            status_code=409, 
+                            detail="An agent with identical semantic metadata is already registered"
+                        )
+
+        # Unregister any previous registration for this agent / normalized URL before re-registering
+        preserved_pubkey = None
+        preserved_prompt_hash = None
+        target_ids_to_clean = {current_target_id} | set(new_agents.keys())
+        for reg_id, reg_info in list(REGISTERED_NODES.items()):
+            reg_url = reg_info.get("url") or ""
+            if reg_id in target_ids_to_clean or (norm_url and reg_url and _normalize_local_url(reg_url) == norm_url):
+                target_ids_to_clean.add(reg_id)
+                if reg_info.get("public_key"):
+                    preserved_pubkey = reg_info["public_key"]
+                if reg_info.get("prompt_hash"):
+                    preserved_prompt_hash = reg_info["prompt_hash"]
+                if reg_url and reg_url != url:
+                    _remove_persisted_endpoint(reg_url)
+                del REGISTERED_NODES[reg_id]
+
+        for existing_id, existing_item in list(ROUTER.registry.items()):
+            existing_node = existing_item.get("node_id") or existing_id
+            existing_url = existing_item.get("url") or ""
+            if existing_id in target_ids_to_clean or existing_node in target_ids_to_clean or (norm_url and existing_url and _normalize_local_url(existing_url) == norm_url):
+                if existing_url and existing_url != url:
+                    _remove_persisted_endpoint(existing_url)
+                del ROUTER.registry[existing_id]
 
         # Extract prompt_hash from payload if present
-        actual_prompt_hash = prompt_hash
+        actual_prompt_hash = prompt_hash or preserved_prompt_hash
         if not actual_prompt_hash and payload:
             actual_prompt_hash = payload.get("prompt_hash")
 
         channel_list = [ch.strip() for ch in channels.split(",") if ch.strip()]
         for skill_id, new_item in new_agents.items():
             target_id = node_id or skill_id
-            
-            # If target_id is registered under a DIFFERENT URL, it's a collision
-            if target_id in REGISTERED_NODES:
-                existing_url = REGISTERED_NODES[target_id].get("url")
-                if existing_url and existing_url != url:
-                    raise HTTPException(
-                        status_code=409, 
-                        detail=f"Agent '{target_id}' is already registered at URL '{existing_url}'"
-                    )
-
-            # Check semantic content collision with a DIFFERENT agent/node
-            for existing_id, existing_item in ROUTER.registry.items():
-                existing_node = existing_item.get("node_id") or existing_id
-                if existing_node != target_id and (
-                    existing_item.get("name") == new_item.get("name") and
-                    existing_item.get("description") == new_item.get("description")
-                ):
-                    raise HTTPException(
-                        status_code=409, 
-                        detail="An agent with identical semantic metadata is already registered"
-                    )
-
             new_agents[skill_id]["channels"] = channel_list
             new_agents[skill_id]["node_id"] = target_id
             if actual_prompt_hash:
@@ -2338,6 +2400,10 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 REGISTERED_NODES[target_id] = {}
             REGISTERED_NODES[target_id]["url"] = url
             REGISTERED_NODES[target_id]["channels"] = channel_list
+            if preserved_pubkey:
+                REGISTERED_NODES[target_id]["public_key"] = preserved_pubkey
+            if actual_prompt_hash:
+                REGISTERED_NODES[target_id]["prompt_hash"] = actual_prompt_hash
 
         ROUTER.update_registry(new_agents)
         ROUTER.build_index()
@@ -2358,14 +2424,16 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
             
-        current_target_id = node_id or url
-        # Check collision: Is the URL used by a DIFFERENT node?
-        for reg_id, reg_info in REGISTERED_NODES.items():
-            if reg_info.get("url") == url and reg_id != current_target_id:
-                raise HTTPException(
-                    status_code=409, 
-                    detail=f"MCP Server URL '{url}' is already registered by node '{reg_id}'"
-                )
+        norm_url = _normalize_local_url(url)
+
+        # Check collision only when an explicit conflicting node_id is provided
+        if node_id is not None:
+            for reg_id, reg_info in REGISTERED_NODES.items():
+                if reg_info.get("url") == url and reg_id != node_id:
+                    raise HTTPException(
+                        status_code=409, 
+                        detail=f"MCP Server URL '{url}' is already registered by node '{reg_id}'"
+                    )
 
         new_tools = await discover_tools([url])
         if not new_tools:
@@ -2374,49 +2442,68 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for MCP tools at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover MCP tools at {url}")
             
+        if node_id is not None:
+            for tool_name, new_item in new_tools.items():
+                for existing_id, existing_item in ROUTER.registry.items():
+                    existing_server = existing_item.get("server_url") or existing_item.get("node_id") or ""
+                    if existing_id != tool_name and existing_server and existing_server != url and existing_server != node_id and _normalize_local_url(existing_server) != norm_url and (
+                        existing_item.get("name") == new_item.get("name") and
+                        existing_item.get("description") == new_item.get("description")
+                    ):
+                        raise HTTPException(
+                            status_code=409, 
+                            detail="A tool with identical semantic metadata is already registered"
+                        )
+
+        # Unregister any previous registration for this MCP server / normalized URL before re-registering
+        effective_node_id = node_id
+        preserved_pubkey = None
+        for reg_id, reg_info in list(REGISTERED_NODES.items()):
+            reg_url = reg_info.get("url") or ""
+            if reg_id == node_id or reg_url == url or (norm_url and reg_url and _normalize_local_url(reg_url) == norm_url):
+                if not effective_node_id and not reg_id.startswith("http"):
+                    effective_node_id = reg_id
+                if reg_info.get("public_key"):
+                    preserved_pubkey = reg_info["public_key"]
+                if reg_url and reg_url != url:
+                    _remove_persisted_endpoint(reg_url)
+                del REGISTERED_NODES[reg_id]
+
+        for existing_id, existing_item in list(ROUTER.registry.items()):
+            existing_server = existing_item.get("server_url") or ""
+            existing_node = existing_item.get("node_id") or ""
+            if (existing_id in new_tools or 
+                (effective_node_id and existing_node == effective_node_id) or 
+                (norm_url and existing_server and _normalize_local_url(existing_server) == norm_url)):
+                if not effective_node_id and existing_node and not existing_node.startswith("http"):
+                    effective_node_id = existing_node
+                if existing_server and existing_server != url:
+                    _remove_persisted_endpoint(existing_server)
+                del ROUTER.registry[existing_id]
+
+        target_id = effective_node_id or url
         channel_list = [ch.strip() for ch in channels.split(",") if ch.strip()]
         for tool_name, new_item in new_tools.items():
-            target_id = node_id or url
-            if tool_name in ROUTER.registry:
-                existing_node = ROUTER.registry[tool_name].get("node_id") or ROUTER.registry[tool_name].get("server_url")
-                if existing_node and existing_node != target_id and existing_node != url:
-                    raise HTTPException(
-                        status_code=409, 
-                        detail=f"Tool '{tool_name}' is already registered by '{existing_node}'"
-                    )
-
-            # Check semantic content collision with a DIFFERENT tool/server
-            for existing_id, existing_item in ROUTER.registry.items():
-                existing_server = existing_item.get("server_url") or existing_item.get("node_id")
-                if existing_id != tool_name and existing_server and existing_server != url and (
-                    existing_item.get("name") == new_item.get("name") and
-                    existing_item.get("description") == new_item.get("description")
-                ):
-                    raise HTTPException(
-                        status_code=409, 
-                        detail="A tool with identical semantic metadata is already registered"
-                    )
-
             new_tools[tool_name]["channels"] = channel_list
-            new_tools[tool_name]["node_id"] = node_id or url
+            new_tools[tool_name]["node_id"] = target_id
             if payload and "precomputed_embeddings" in payload:
                 pre_embs = payload["precomputed_embeddings"]
                 if tool_name in pre_embs:
                     new_tools[tool_name]["precomputed_embedding"] = pre_embs[tool_name]
             
         # Update or add MCP tools in registry
-        for tool_name, item in new_tools.items():
-            target_id = node_id or url
-            if target_id not in REGISTERED_NODES:
-                REGISTERED_NODES[target_id] = {}
-            REGISTERED_NODES[target_id]["url"] = url
-            REGISTERED_NODES[target_id]["channels"] = channel_list
+        if target_id not in REGISTERED_NODES:
+            REGISTERED_NODES[target_id] = {}
+        REGISTERED_NODES[target_id]["url"] = url
+        REGISTERED_NODES[target_id]["channels"] = channel_list
+        if preserved_pubkey:
+            REGISTERED_NODES[target_id]["public_key"] = preserved_pubkey
 
         ROUTER.update_registry(new_tools)
         ROUTER.build_index()
         
         persist_endpoint("mcp", url)
-        add_system_log("REGISTRATION", node_id or "MCP Server", f"Successfully registered MCP Server at {url} with {len(new_tools)} tools.")
+        add_system_log("REGISTRATION", target_id, f"Successfully registered MCP Server at {url} with {len(new_tools)} tools.")
         return {
             "status": "success",
             "message": f"Successfully registered MCP Server at {url}",

@@ -67,6 +67,13 @@ export default function RegistryPage() {
         setPendingReg(null);
         setStatusMsg({ text: `Registering ${req.type.toUpperCase()} at ${req.cleanUrl}...`, error: false });
         try {
+            try {
+                await fetch(`${GATEWAY_URL}/register/disconnect`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ node_id: req.cleanUrl })
+                });
+            } catch (_) {}
             const res = await fetch(req.apiUrl, { method: "POST" });
             const data = await res.json();
             if (res.ok) {
