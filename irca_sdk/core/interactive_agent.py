@@ -84,6 +84,8 @@ class IRCAInteractiveAgent(IRCAAgent):
         """
         Helper method to delegate a simplified query to the BFA Gateway or another agent,
         without sending the entire context/memory stack.
+        Automatically utilizes IRC-A two-phase negotiation (Phase 1 Discover + Phase 2 Authorize + P2P)
+        with fallback to Gateway /invoke with channel authentication headers.
         """
         if not self.gateway_url:
             return "Error: Gateway URL not configured."
@@ -92,6 +94,21 @@ class IRCAInteractiveAgent(IRCAAgent):
             # Record that we are delegating
             self.memory_stack.record_agent_invocation(session_id, "gateway_delegate")
 
+        # 1. First attempt: Standard Phase 1 Discover + Phase 2 Authorize + Direct P2P
+        try:
+            p2p_res = await self.invoke_capability(intent=query)
+            if p2p_res is not None:
+                if isinstance(p2p_res, str):
+                    return p2p_res
+                elif isinstance(p2p_res, dict) and "result" in p2p_res and "message" in p2p_res["result"]:
+                    parts = p2p_res["result"]["message"].get("parts", [])
+                    if parts and "text" in parts[0]:
+                        return parts[0]["text"]
+                return str(p2p_res)
+        except Exception:
+            pass
+
+        # 2. Fallback: Call Gateway /invoke sending authentication & channel headers
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -102,11 +119,17 @@ class IRCAInteractiveAgent(IRCAAgent):
         encoded_query = urllib.parse.quote(query)
         invoke_url = f"{self.gateway_url.rstrip('/')}/invoke?query={encoded_query}"
         
-        async with httpx.AsyncClient(timeout=10) as client:
+        headers = {}
+        if self.session_token:
+            headers["Authorization"] = f"Bearer {self.session_token}"
+        if self.channels:
+            headers["x-channels"] = ",".join(self.channels)
+        if self.agent_id:
+            headers["x-node-id"] = self.agent_id
+
+        async with httpx.AsyncClient(timeout=15) as client:
             try:
-                # We call the Gateway's invoke endpoint which does the semantic routing
-                # and forwards only the simplified query to the target agent.
-                res = await client.post(invoke_url, json=payload)
+                res = await client.post(invoke_url, json=payload, headers=headers)
                 if res.status_code == 200:
                     data = res.json()
                     if "result" in data and "output" in data["result"]:

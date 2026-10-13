@@ -547,30 +547,73 @@ class IRCAAgent(abc.ABC):
     ) -> Any:
         """
         Direct Peer-to-Peer mTLS / HTTP invocation to target node presenting the signed DET token.
+        Supports FastMCP tools and standard A2A JSON-RPC Agents with Docker network fallback.
         """
+        target_urls = [endpoint]
+        if os.path.exists("/.dockerenv") and ("127.0.0.1" in endpoint or "localhost" in endpoint):
+            target_urls.append(endpoint.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal"))
+        elif not os.path.exists("/.dockerenv") and "host.docker.internal" in endpoint:
+            target_urls.append(endpoint.replace("host.docker.internal", "127.0.0.1"))
+
+        last_error = None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            if is_tool:
-                tools_url = endpoint.rstrip("/") + "/tools" if not endpoint.endswith("/tools") else endpoint
-                prepared_args = dict(args)
-                prepared_args["_det"] = det
-                prepared_args["delegated_token"] = det
-                res = await client.post(
-                    tools_url,
-                    json={"tool": tool_or_action, "arguments": prepared_args}
-                )
-                if res.status_code == 200:
-                    return res.json()
-                raise RuntimeError(f"Peer tool invocation failed ({res.status_code}): {res.text}")
-            else:
-                headers = {"Authorization": f"Bearer {det}", "x-irca-det": det}
-                res = await client.post(
-                    endpoint,
-                    json={"method": tool_or_action, "params": args},
-                    headers=headers
-                )
-                if res.status_code == 200:
-                    return res.json()
-                raise RuntimeError(f"Peer agent invocation failed ({res.status_code}): {res.text}")
+            for url in target_urls:
+                try:
+                    if is_tool:
+                        tools_url = url.rstrip("/") + "/tools" if not url.endswith("/tools") else url
+                        prepared_args = dict(args) if isinstance(args, dict) else {"query": args}
+                        prepared_args["_det"] = det
+                        prepared_args["delegated_token"] = det
+                        res = await client.post(
+                            tools_url,
+                            json={"tool": tool_or_action, "arguments": prepared_args}
+                        )
+                        if res.status_code == 200:
+                            return res.json()
+                        raise RuntimeError(f"Peer tool invocation failed ({res.status_code}): {res.text}")
+                    else:
+                        headers = {
+                            "Authorization": f"Bearer {det}",
+                            "x-det": det,
+                            "x-irca-det": det,
+                            "A2A-Version": "1.0"
+                        }
+                        if isinstance(args, dict) and "jsonrpc" in args and "method" in args:
+                            a2a_body = args
+                        else:
+                            text_msg = args if isinstance(args, str) else (
+                                args.get("query") or args.get("message") or args.get("text") or (json.dumps(args) if isinstance(args, dict) else str(args))
+                            )
+                            a2a_body = {
+                                "jsonrpc": "2.0",
+                                "method": "SendMessage",
+                                "params": {
+                                    "message": {
+                                        "role": 1,
+                                        "message_id": f"bfa-msg-{int(time.time()*1000)}",
+                                        "context_id": f"bfa-ctx-{int(time.time()*1000)}",
+                                        "parts": [{"text": str(text_msg)}]
+                                    }
+                                },
+                                "id": 1
+                            }
+                        res = await client.post(
+                            url,
+                            json=a2a_body,
+                            headers=headers
+                        )
+                        if res.status_code == 200:
+                            data = res.json()
+                            if "result" in data and "message" in data["result"]:
+                                parts = data["result"]["message"].get("parts", [])
+                                if parts and "text" in parts[0]:
+                                    return parts[0]["text"]
+                            return data
+                        raise RuntimeError(f"Peer agent invocation failed ({res.status_code}): {res.text}")
+                except Exception as e:
+                    last_error = e
+                    continue
+            raise RuntimeError(f"P2P call failed for all endpoints {target_urls}: {last_error}")
 
     async def invoke_capability(
         self,

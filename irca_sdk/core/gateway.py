@@ -2511,17 +2511,61 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
 
     @app.post("/invoke")
-    async def invoke(query: str, payload: Dict[str, Any] = None):
+    async def invoke(
+        query: str, 
+        payload: Dict[str, Any] = None,
+        authorization: Optional[str] = Header(None, alias="Authorization"),
+        x_channels: Optional[str] = Header(None, alias="x-channels"),
+        x_node_id: Optional[str] = Header(None, alias="x-node-id")
+    ):
         """
         Semantically select the best agent and forward the JSON-RPC execution.
+        Enforces Logical Channel Masking and caller loop prevention if caller session or channels are provided.
         """
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
             
         await prune_dead_endpoints()
             
+        # Extract caller authentication and channels if provided
+        auth_token = None
+        if authorization:
+            if authorization.lower().startswith("bearer "):
+                auth_token = authorization[7:].strip()
+            else:
+                auth_token = authorization.strip()
+        elif payload and payload.get("session_token"):
+            auth_token = payload.get("session_token")
+
+        caller_id = x_node_id or (payload.get("caller_id") if payload else None) or (payload.get("node_id") if payload else None)
+        caller_channels = None
+
+        if auth_token:
+            try:
+                decoded = verify_paseto_v4_public(auth_token, GATEWAY_PUBLIC_KEY)
+                if decoded.get("sub"):
+                    caller_id = decoded["sub"]
+                if decoded.get("channels"):
+                    caller_channels = decoded["channels"]
+            except Exception:
+                pass
+
+        if not caller_channels and x_channels:
+            caller_channels = [c.strip() for c in x_channels.split(",") if c.strip()]
+        elif not caller_channels and payload and payload.get("channels"):
+            raw_ch = payload["channels"]
+            caller_channels = raw_ch if isinstance(raw_ch, list) else [c.strip() for c in str(raw_ch).split(",") if c.strip()]
+        elif not caller_channels and caller_id and caller_id in REGISTERED_NODES:
+            caller_channels = REGISTERED_NODES[caller_id].get("channels")
+
         req_threshold = payload.get("threshold") if (payload and payload.get("threshold") is not None) else CONFIG.semantic_threshold
-        result = ROUTER.resolve(query, threshold=req_threshold, filter_type="agent")
+        result = ROUTER.resolve(
+            query, 
+            threshold=req_threshold, 
+            filter_type="agent",
+            agent_channels=caller_channels,
+            exclude_node_id=caller_id
+        )
         best = result.get("best")
         
         if not best:
@@ -2540,7 +2584,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         det_claims = {
             "jti": str(uuid.uuid4()),
             "iss": "irca-gateway",
-            "sub": "gateway-broker",
+            "sub": caller_id or "gateway-broker",
             "aud": target_node_id,
             "permitted_action": "SendMessage",
             "restricted_params": {},
@@ -2577,24 +2621,39 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         # Add system log for Observability Console
         add_system_log("DISCOVERY", target_node_id, f"Resolved query '{query}' -> target '{target_node_id}' ({agent_url}). Mints DET token.")
 
-        # 2. Forward request to A2A Agent with required DET and version headers
+        # 2. Forward request to A2A Agent with Docker fallback
+        target_urls = [agent_url]
+        if os.path.exists("/.dockerenv") and ("127.0.0.1" in agent_url or "localhost" in agent_url):
+            target_urls.append(agent_url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal"))
+        elif not os.path.exists("/.dockerenv") and "host.docker.internal" in agent_url:
+            target_urls.append(agent_url.replace("host.docker.internal", "127.0.0.1"))
+
+        response_json = None
+        last_exc = None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.post(
-                    agent_url, 
-                    json=a2a_payload,
-                    headers={
-                        "A2A-Version": "1.0",
-                        "x-det": det
-                    }
-                )
-                response_json = response.json()
-            except Exception as e:
-                add_system_log("ERROR", target_node_id, f"Execution failed for query '{query}': {e}")
-                raise HTTPException(
-                    status_code=502, 
-                    detail=f"Failed to forward request to Agent at {agent_url}: {e}"
-                )
+            for t_url in target_urls:
+                try:
+                    response = await client.post(
+                        t_url, 
+                        json=a2a_payload,
+                        headers={
+                            "A2A-Version": "1.0",
+                            "x-det": det,
+                            "Authorization": f"Bearer {det}"
+                        }
+                    )
+                    response_json = response.json()
+                    break
+                except Exception as e:
+                    last_exc = e
+                    continue
+
+        if response_json is None:
+            add_system_log("ERROR", target_node_id, f"Execution failed for query '{query}': {last_exc}")
+            raise HTTPException(
+                status_code=502, 
+                detail=f"Failed to forward request to Agent at {agent_url}: {last_exc}"
+            )
                 
         # 3. Translate the outgoing A2A response back to the frontend format
         if "error" in response_json:
