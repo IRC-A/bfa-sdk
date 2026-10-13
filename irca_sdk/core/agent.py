@@ -214,7 +214,8 @@ class IRCAAgent(abc.ABC):
         gateway_public_key: Any = None,
         gateway_url: str = None,
         parameter_extractors: Optional[Dict[str, str]] = None,
-        prompt_template: Optional[str] = None
+        prompt_template: Optional[str] = None,
+        channels: Optional[List[str]] = None
     ):
         self.agent_id = agent_id
         self.name = name
@@ -251,8 +252,11 @@ class IRCAAgent(abc.ABC):
             self.gateway_public_key = gateway_public_key
 
         # Resolve channels
-        raw_channels = os.getenv("IRCA_CHANNELS", "#public")
-        self.channels = [ch.strip() for ch in raw_channels.split(",")]
+        if channels is not None:
+            self.channels = channels if isinstance(channels, list) else [ch.strip() for ch in channels.split(",")]
+        else:
+            raw_channels = os.getenv("IRCA_CHANNELS", "#public")
+            self.channels = [ch.strip() for ch in raw_channels.split(",")]
 
         self.session_token = None
         self.token_expiry = 0
@@ -491,8 +495,16 @@ class IRCAAgent(abc.ABC):
         if threshold is not None:
             payload["threshold"] = threshold
 
+        headers = {}
+        if self.session_token:
+            headers["Authorization"] = f"Bearer {self.session_token}"
+        if self.channels:
+            headers["x-channels"] = ",".join(self.channels)
+        if self.agent_id:
+            headers["x-node-id"] = self.agent_id
+
         async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.post(discover_url, json=payload)
+            res = await client.post(discover_url, json=payload, headers=headers)
             if res.status_code == 404:
                 return None
             if res.status_code == 200:
@@ -528,6 +540,12 @@ class IRCAAgent(abc.ABC):
             "exclude_node_id": self.agent_id
         }
         headers = {}
+        if self.session_token:
+            headers["Authorization"] = f"Bearer {self.session_token}"
+        if self.channels:
+            headers["x-channels"] = ",".join(self.channels)
+        if self.agent_id:
+            headers["x-node-id"] = self.agent_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
 
@@ -543,7 +561,8 @@ class IRCAAgent(abc.ABC):
         tool_or_action: str,
         args: Dict[str, Any],
         det: str,
-        is_tool: bool = True
+        is_tool: bool = True,
+        intent: Optional[str] = None
     ) -> Any:
         """
         Direct Peer-to-Peer mTLS / HTTP invocation to target node presenting the signed DET token.
@@ -582,8 +601,15 @@ class IRCAAgent(abc.ABC):
                             a2a_body = args
                         else:
                             text_msg = args if isinstance(args, str) else (
-                                args.get("query") or args.get("message") or args.get("text") or (json.dumps(args) if isinstance(args, dict) else str(args))
+                                (args.get("query") or args.get("message") or args.get("text")) if isinstance(args, dict) else None
                             )
+                            if not text_msg:
+                                if isinstance(args, dict) and args:
+                                    text_msg = json.dumps(args)
+                                elif intent:
+                                    text_msg = intent
+                                else:
+                                    text_msg = tool_or_action
                             a2a_body = {
                                 "jsonrpc": "2.0",
                                 "method": "SendMessage",
@@ -615,6 +641,89 @@ class IRCAAgent(abc.ABC):
                     continue
             raise RuntimeError(f"P2P call failed for all endpoints {target_urls}: {last_error}")
 
+    async def request_assistance(
+        self,
+        intent: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+        threshold: Optional[float] = None,
+        query: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Universal 3-Phase Assistance Protocol for all BFA/IRC-A Agents:
+        1. Phase 1 - Discover: Inquires BFA Gateway if any agent or tool can help within
+           the calling agent's authorized channels, and retrieves the required input_schema.
+           If no helper is available, returns helper_available=False immediately.
+        2. Phase 2 - Authorize: Calls BFA Gateway /authorize with concrete parameters,
+           verifying parameter lockdown and obtaining the ephemeral signed DET and target endpoint.
+        3. Phase 3 - Execution: Invokes the peer agent or tool directly Peer-to-Peer (P2P)
+           presenting the signed DET token.
+        """
+        actual_intent = intent or query
+        if not actual_intent:
+            raise ValueError("IRCAAgent: 'intent' or 'query' must be provided to request_assistance.")
+
+        match = await self.discover_capability(actual_intent, threshold=threshold)
+        if not match:
+            return {
+                "status": "no_match",
+                "helper_available": False,
+                "message": f"No capable helper found for intent '{actual_intent}' within authorized channels.",
+                "result": None
+            }
+
+        tool_name = match.get("tool") or match.get("node_id")
+        target_endpoint = match.get("endpoint") or match.get("url")
+        target_type = match.get("type", "agent")
+        input_schema = match.get("input_schema", {})
+        call_params = params or {}
+
+        auth_info = await self.authorize_execution(intent=actual_intent, tool=tool_name, args=call_params)
+        det = auth_info.get("det")
+        endpoint = auth_info.get("endpoint") or target_endpoint
+        is_tool = (auth_info.get("type") == "tool") or (target_type == "tool")
+
+        result = await self.call_peer_p2p(
+            endpoint=endpoint,
+            tool_or_action=tool_name,
+            args=call_params,
+            det=det,
+            is_tool=is_tool,
+            intent=actual_intent
+        )
+
+        return {
+            "status": "success",
+            "helper_available": True,
+            "target": tool_name,
+            "type": target_type,
+            "endpoint": endpoint,
+            "input_schema": input_schema,
+            "det": det,
+            "result": result
+        }
+
+    async def delegate_task(
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """
+        Direct delegation helper available on ALL agents.
+        Executes the IRC-A 2-Phase negotiation (Phase 1 Discover + Phase 2 Authorize + P2P)
+        and unwraps the peer's response.
+        """
+        assistance = await self.request_assistance(query=query, params=params)
+        if not assistance.get("helper_available"):
+            return f"No helper available for query: {query}"
+        res = assistance.get("result")
+        if isinstance(res, str):
+            return res
+        elif isinstance(res, dict) and "result" in res and "message" in res["result"]:
+            parts = res["result"]["message"].get("parts", [])
+            if parts and "text" in parts[0]:
+                return parts[0]["text"]
+        return res
+
     async def invoke_capability(
         self,
         intent: str,
@@ -626,26 +735,10 @@ class IRCAAgent(abc.ABC):
         2. Authorizes execution with arguments (Phase 2).
         3. Invokes target node directly P2P.
         """
-        match = await self.discover_capability(intent)
-        if not match:
+        assistance = await self.request_assistance(intent=intent, params=args)
+        if not assistance.get("helper_available"):
             raise RuntimeError(f"No capability found for intent '{intent}'")
-
-        tool_name = match.get("tool") or match.get("node_id")
-        endpoint = match.get("endpoint") or match.get("url")
-        is_tool = match.get("type") == "tool"
-
-        call_args = args or {}
-        auth_info = await self.authorize_execution(intent=intent, tool=tool_name, args=call_args)
-        det = auth_info["det"]
-        target_endpoint = auth_info.get("endpoint") or endpoint
-
-        return await self.call_peer_p2p(
-            endpoint=target_endpoint,
-            tool_or_action=tool_name,
-            args=call_args,
-            det=det,
-            is_tool=is_tool
-        )
+        return assistance.get("result")
 
     def verify_incoming_det(self, delegated_token: str, expected_function: str, runtime_args: dict) -> bool:
         """

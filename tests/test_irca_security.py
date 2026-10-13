@@ -1367,6 +1367,113 @@ async def test_irca_agent_two_phase_methods(monkeypatch):
     assert res_high == {"status": "success", "result": "audit_passed"}
 
 
+@pytest.mark.anyio
+async def test_irca_agent_request_assistance_and_delegate_task(monkeypatch):
+    """
+    Tests request_assistance and delegate_task methods on any BFAAgent / IRCAAgent.
+    Verifies Phase 1 discover -> Phase 2 authorize -> Phase 3 P2P execution,
+    and handling when no helper is available in caller channels.
+    """
+    from irca_sdk.core.agent import IRCAAgent, BFAAgent
+
+    class BankingAgent(BFAAgent):
+        async def run(self, user_message, context):
+            return "banking response"
+
+    agent = BankingAgent(
+        agent_id="banking-agent",
+        name="Banking Agent",
+        description="Handles general banking",
+        tags=["bank"],
+        examples=["balance"],
+        url="http://localhost:8002",
+        channels=["#finance"]
+    )
+    agent.session_token = "valid-session-token"
+    agent.gateway_url = "http://mock-gateway:8000"
+
+    import httpx
+
+    call_log = []
+
+    async def mock_post(self_client, url, json=None, headers=None, **kwargs):
+        class MockResponse:
+            def __init__(self, status_code, data):
+                self.status_code = status_code
+                self._data = data
+                self.text = "mock"
+            def json(self):
+                return self._data
+
+        call_log.append({"url": url, "json": json, "headers": headers})
+
+        if "/discover" in url:
+            intent = json.get("intent", "")
+            if "unsupported" in intent:
+                return MockResponse(404, {"detail": "No matching capability found"})
+            return MockResponse(200, {
+                "match": {
+                    "node_id": "audit-tool",
+                    "tool": "audit_account",
+                    "endpoint": "http://mock-peer:8080",
+                    "type": "tool",
+                    "input_schema": {"properties": {"acc_id": {"type": "string"}}}
+                }
+            })
+        elif "/authorize" in url:
+            return MockResponse(200, {
+                "status": "success",
+                "det": "v4.public.mock-assistance-det",
+                "endpoint": "http://mock-peer:8080",
+                "target_node_id": "audit-tool",
+                "type": "tool",
+                "restricted_params": json.get("args", {})
+            })
+        elif "/tools" in url:
+            return MockResponse(200, {"status": "success", "balance": 5000})
+        return MockResponse(404, {})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    # 1. Test request_assistance when helper is found
+    assistance = await agent.request_assistance(
+        intent="consultar saldo cuenta",
+        params={"acc_id": "ACC-999"}
+    )
+    assert assistance["status"] == "success"
+    assert assistance["helper_available"] is True
+    assert assistance["target"] == "audit_account"
+    assert assistance["input_schema"] == {"properties": {"acc_id": {"type": "string"}}}
+    assert assistance["det"] == "v4.public.mock-assistance-det"
+    assert assistance["result"] == {"status": "success", "balance": 5000}
+
+    # Verify headers were passed in discover and authorize
+    discover_call = next(c for c in call_log if "/discover" in c["url"])
+    assert discover_call["headers"]["Authorization"] == "Bearer valid-session-token"
+    assert discover_call["headers"]["x-channels"] == "#finance"
+    assert discover_call["headers"]["x-node-id"] == "banking-agent"
+
+    auth_call = next(c for c in call_log if "/authorize" in c["url"])
+    assert auth_call["headers"]["Authorization"] == "Bearer valid-session-token"
+    assert auth_call["headers"]["x-channels"] == "#finance"
+    assert auth_call["json"]["args"] == {"acc_id": "ACC-999"}
+
+    # 2. Test request_assistance when no helper is found (e.g. 404 from Gateway)
+    assistance_none = await agent.request_assistance(intent="unsupported query")
+    assert assistance_none["status"] == "no_match"
+    assert assistance_none["helper_available"] is False
+    assert assistance_none["result"] is None
+
+    # 3. Test delegate_task on base BFAAgent
+    del_res = await agent.delegate_task(query="consultar saldo cuenta", params={"acc_id": "ACC-999"})
+    assert del_res == {"status": "success", "balance": 5000}
+
+    # 4. Test delegate_task when no helper available
+    del_none = await agent.delegate_task(query="unsupported query")
+    assert "No helper available" in del_none
+
+
+
 
 
 

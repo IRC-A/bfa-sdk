@@ -80,7 +80,7 @@ class IRCAInteractiveAgent(IRCAAgent):
         """
         pass
 
-    async def delegate_task(self, query: str, session_id: str = None) -> str:
+    async def delegate_task(self, query: str, session_id: str = None, params: Dict[str, Any] = None) -> str:
         """
         Helper method to delegate a simplified query to the BFA Gateway or another agent,
         without sending the entire context/memory stack.
@@ -94,17 +94,11 @@ class IRCAInteractiveAgent(IRCAAgent):
             # Record that we are delegating
             self.memory_stack.record_agent_invocation(session_id, "gateway_delegate")
 
-        # 1. First attempt: Standard Phase 1 Discover + Phase 2 Authorize + Direct P2P
+        # 1. First attempt: Standard Phase 1 Discover + Phase 2 Authorize + Direct P2P on base class
         try:
-            p2p_res = await self.invoke_capability(intent=query)
-            if p2p_res is not None:
-                if isinstance(p2p_res, str):
-                    return p2p_res
-                elif isinstance(p2p_res, dict) and "result" in p2p_res and "message" in p2p_res["result"]:
-                    parts = p2p_res["result"]["message"].get("parts", [])
-                    if parts and "text" in parts[0]:
-                        return parts[0]["text"]
-                return str(p2p_res)
+            base_res = await super().delegate_task(query=query, params=params)
+            if base_res and not str(base_res).startswith("No helper available"):
+                return str(base_res)
         except Exception:
             pass
 
