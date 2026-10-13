@@ -92,7 +92,7 @@ class BFAStorageManager:
                 print(f"BFAStorageManager: Error loading from DynamoDB: {e}")
                 return {"agent_endpoints": [], "mcp_endpoints": [], "version": 1}
         else:
-            db_path = REGISTRY_DB_PATH
+            db_path = os.getenv("BFA_REGISTRY_DB_PATH", REGISTRY_DB_PATH)
             if os.path.isdir(db_path):
                 db_path = os.path.join(db_path, "bfa_registry_db.json")
             if not os.path.exists(db_path):
@@ -159,9 +159,11 @@ class BFAStorageManager:
             return False
         else:
             try:
-                db_path = REGISTRY_DB_PATH
+                db_path = os.getenv("BFA_REGISTRY_DB_PATH", REGISTRY_DB_PATH)
                 if os.path.isdir(db_path):
                     db_path = os.path.join(db_path, "bfa_registry_db.json")
+                elif os.path.dirname(db_path):
+                    os.makedirs(os.path.dirname(db_path), exist_ok=True)
                 file_data = {
                     "agent_endpoints": data.get("agent_endpoints", []),
                     "mcp_endpoints": data.get("mcp_endpoints", [])
@@ -201,12 +203,32 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
     registry = {}
     async with httpx.AsyncClient(timeout=30.0) as client:
         for url in endpoints:
+            card = None
             try:
                 resolver = A2ACardResolver(
                     httpx_client=client,
                     base_url=url,
                 )
                 card = await resolver.get_agent_card()
+            except Exception as e:
+                alt_url = None
+                if os.path.exists("/.dockerenv") and ("127.0.0.1" in url or "localhost" in url):
+                    alt_url = url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
+                elif not os.path.exists("/.dockerenv") and "host.docker.internal" in url:
+                    alt_url = url.replace("host.docker.internal", "127.0.0.1")
+                if alt_url and alt_url != url:
+                    try:
+                        resolver = A2ACardResolver(
+                            httpx_client=client,
+                            base_url=alt_url,
+                        )
+                        card = await resolver.get_agent_card()
+                    except Exception:
+                        print(f"BFA Discovery: Error connecting to Agent at {url}: {e}")
+                else:
+                    print(f"BFA Discovery: Error connecting to Agent at {url}: {e}")
+
+            if card:
                 for skill in card.skills:
                     registry[str(skill.id)] = {
                         "name": str(skill.name),
@@ -216,8 +238,6 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
                         "examples": list(skill.examples),
                         "type": "agent",
                     }
-            except Exception as e:
-                print(f"BFA Discovery: Error connecting to Agent at {url}: {e}")
     return registry
 
 
@@ -228,9 +248,25 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
     registry = {}
     async with httpx.AsyncClient(timeout=30.0) as client:
         for url in endpoints:
+            response = None
             try:
                 response = await client.get(f"{url}/tools")
-                if response.status_code == 200:
+            except Exception as e:
+                alt_url = None
+                if os.path.exists("/.dockerenv") and ("127.0.0.1" in url or "localhost" in url):
+                    alt_url = url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
+                elif not os.path.exists("/.dockerenv") and "host.docker.internal" in url:
+                    alt_url = url.replace("host.docker.internal", "127.0.0.1")
+                if alt_url and alt_url != url:
+                    try:
+                        response = await client.get(f"{alt_url}/tools")
+                    except Exception:
+                        print(f"BFA Discovery: Error connecting to MCP server at {url}: {e}")
+                else:
+                    print(f"BFA Discovery: Error connecting to MCP server at {url}: {e}")
+
+            if response is not None and response.status_code == 200:
+                try:
                     tools = response.json()
                     for tool in tools:
                         tool_name = tool.get("name")
@@ -247,8 +283,8 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
                             "tags": tags,
                             "examples": examples,
                         }
-            except Exception as e:
-                print(f"BFA Discovery: Error connecting to MCP server at {url}: {e}")
+                except Exception as e:
+                    print(f"BFA Discovery: Error parsing MCP tools from {url}: {e}")
     return registry
 
 
@@ -280,7 +316,10 @@ async def prune_dead_endpoints():
     async with httpx.AsyncClient(timeout=3.0) as client:
         for url in urls_to_check:
             try:
-                check_url = url.replace("host.docker.internal", "127.0.0.1") if not os.path.exists("/.dockerenv") else url
+                if os.path.exists("/.dockerenv"):
+                    check_url = url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
+                else:
+                    check_url = url.replace("host.docker.internal", "127.0.0.1")
                 is_mcp = False
                 for item in ROUTER.registry.values():
                     if (item.get("server_url") == url or item.get("url") == url) and item.get("type") == "tool":
@@ -455,20 +494,28 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
     @app.get("/skills")
     async def get_skills():
         await prune_dead_endpoints()
-        registry = dict(ROUTER.registry) if ROUTER else {}
-        for node_id, data in REGISTERED_NODES.items():
+        registry = {}
+        if ROUTER:
+            for k, item in ROUTER.registry.items():
+                copied = dict(item)
+                if not copied.get("channels"):
+                    node_ref = copied.get("node_id") or k
+                    copied["channels"] = REGISTERED_NODES.get(node_ref, {}).get("channels", ["#public"])
+                registry[k] = copied
+        for node_id, data in list(REGISTERED_NODES.items()):
             found = False
             for k, item in registry.items():
                 if item.get("node_id") == node_id or k == node_id:
                     found = True
                     break
-            if not found:
+            if not found and (data.get("url") or data.get("description")):
                 registry[node_id] = {
-                    "name": node_id,
-                    "description": f"Registered node on channels {', '.join(data.get('channels', []))}",
+                    "name": data.get("name") or node_id,
+                    "description": data.get("description") or "No description",
                     "url": data.get("url", f"http://{node_id}"),
-                    "tags": data.get("channels", ["#public"]),
-                    "examples": [],
+                    "tags": [t for t in data.get("tags", []) if not str(t).startswith("#")],
+                    "channels": data.get("channels", ["#public"]),
+                    "examples": data.get("examples", []),
                     "type": "agent",
                     "node_id": node_id
                 }
@@ -1219,8 +1266,106 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                         font-size: 0.7rem;
                         color: #e5e7eb;
                         overflow-x: auto;
-                        margin-top: 4px;
+                        margin-top: 6px;
                         user-select: all;
+                    }
+                    .reg-row {
+                        display: flex;
+                        gap: 8px;
+                        margin-top: 6px;
+                        align-items: center;
+                    }
+                    .reg-input {
+                        background: #0b0f19;
+                        border: 1px solid var(--border-color);
+                        color: var(--text-color);
+                        padding: 8px 10px;
+                        border-radius: 8px;
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: 0.72rem;
+                        flex: 1;
+                        outline: none;
+                        transition: border-color 0.2s;
+                    }
+                    .reg-input:focus {
+                        border-color: var(--accent-blue);
+                    }
+                    .reg-input-channels {
+                        max-width: 170px;
+                    }
+                    .btn-reg {
+                        border: none;
+                        color: #ffffff;
+                        padding: 8px 14px;
+                        border-radius: 8px;
+                        font-size: 0.75rem;
+                        font-weight: 700;
+                        cursor: pointer;
+                        white-space: nowrap;
+                        transition: opacity 0.2s, transform 0.1s;
+                    }
+                    .btn-reg:hover {
+                        opacity: 0.92;
+                    }
+                    .btn-reg:active {
+                        transform: scale(0.98);
+                    }
+                    .btn-reg-agent {
+                        background: var(--accent-blue);
+                    }
+                    .btn-reg-mcp {
+                        background: var(--accent-purple);
+                    }
+                    .node-channels-row {
+                        font-size: 0.72rem;
+                        color: var(--text-muted);
+                        margin-bottom: 10px;
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                        flex-wrap: wrap;
+                    }
+                    .channel-list-badge {
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: 0.7rem;
+                        color: #93c5fd;
+                        background: rgba(59, 130, 246, 0.12);
+                        border: 1px solid rgba(59, 130, 246, 0.28);
+                        padding: 2px 8px;
+                        border-radius: 6px;
+                    }
+                    .node-params-row {
+                        font-size: 0.72rem;
+                        color: var(--text-muted);
+                        margin-top: 8px;
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                        flex-wrap: wrap;
+                    }
+                    .params-list-badge {
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: 0.7rem;
+                        color: #c4b5fd;
+                        background: rgba(139, 92, 246, 0.14);
+                        border: 1px solid rgba(139, 92, 246, 0.3);
+                        padding: 2px 8px;
+                        border-radius: 6px;
+                    }
+                    dialog.reg-modal {
+                        background: #111827;
+                        color: var(--text-color);
+                        border: 1px solid #374151;
+                        border-radius: 16px;
+                        padding: 24px;
+                        max-width: 640px;
+                        width: 92%;
+                        margin: auto;
+                        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+                    }
+                    dialog.reg-modal::backdrop {
+                        background: rgba(0, 0, 0, 0.72);
+                        backdrop-filter: blur(4px);
                     }
                     .no-nodes {
                         text-align: center;
@@ -1253,20 +1398,31 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                     <div class="content-area">
                         <!-- Top Section -->
                         <div class="grid-top">
-                            <!-- Programmatic cURL Info -->
+                            <!-- Programmatic cURL Info + Interactive Registration -->
                             <div class="card">
                                 <h2><span>💻</span> Programmatic Service Registry (cURL)</h2>
-                                <p class="card-desc">To dynamically register a new agent or MCP server, send a POST request to the Gateway. Indexing in the FAISS semantic pool is executed instantly in hot-connect mode.</p>
+                                <p class="card-desc">To dynamically register a new agent or MCP server, enter its endpoint below or send a POST request to the Gateway. Indexing in the FAISS semantic pool is executed instantly in hot-connect mode.</p>
                                 
-                                <div style="display: flex; flex-direction: column; gap: 12px;">
+                                <div style="display: flex; flex-direction: column; gap: 16px;">
                                     <div>
-                                        <span style="font-size: 0.7rem; font-weight: 600; color: var(--accent-blue);">Register an Agent (A2A):</span>
-                                        <div class="curl-cmd">curl -X POST "http://127.0.0.1:8000/register/agent?url=http://127.0.0.1:8104&channels=%23content"</div>
+                                        <span style="font-size: 0.75rem; font-weight: 600; color: var(--accent-blue);">Register an Agent (A2A):</span>
+                                        <div class="reg-row">
+                                            <input type="text" id="reg-agent-url" class="reg-input" placeholder="http://127.0.0.1:8104" value="http://127.0.0.1:8104" oninput="syncCurlPreview('agent')" />
+                                            <input type="text" id="reg-agent-channels" class="reg-input reg-input-channels" placeholder="#public,#content" value="#content" oninput="syncCurlPreview('agent')" />
+                                            <button type="button" class="btn-reg btn-reg-agent" onclick="openRegisterPrompt('agent')">Register Agent</button>
+                                        </div>
+                                        <div class="curl-cmd" id="curl-agent-preview">curl -X POST "http://127.0.0.1:8000/register/agent?url=http://127.0.0.1:8104&channels=%23content"</div>
                                     </div>
                                     <div>
-                                        <span style="font-size: 0.7rem; font-weight: 600; color: var(--accent-purple);">Register an MCP Server:</span>
-                                        <div class="curl-cmd">curl -X POST "http://127.0.0.1:8000/register/mcp?url=http://127.0.0.1:8102&channels=%23content"</div>
+                                        <span style="font-size: 0.75rem; font-weight: 600; color: var(--accent-purple);">Register an MCP Server:</span>
+                                        <div class="reg-row">
+                                            <input type="text" id="reg-mcp-url" class="reg-input" placeholder="http://127.0.0.1:8102" value="http://127.0.0.1:8102" oninput="syncCurlPreview('mcp')" />
+                                            <input type="text" id="reg-mcp-channels" class="reg-input reg-input-channels" placeholder="#public,#content" value="#content" oninput="syncCurlPreview('mcp')" />
+                                            <button type="button" class="btn-reg btn-reg-mcp" onclick="openRegisterPrompt('mcp')">Register MCP</button>
+                                        </div>
+                                        <div class="curl-cmd" id="curl-mcp-preview">curl -X POST "http://127.0.0.1:8000/register/mcp?url=http://127.0.0.1:8102&channels=%23content"</div>
                                     </div>
+                                    <div id="reg-status-banner" style="display: none; font-size: 0.75rem; padding: 10px 12px; border-radius: 8px; font-family: 'JetBrains Mono', monospace;"></div>
                                 </div>
                             </div>
 
@@ -1346,7 +1502,116 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                     </div>
                 </div>
 
+                <!-- Confirmation Modal for Registration -->
+                <dialog id="register-confirm-modal" class="reg-modal">
+                    <h3 id="modal-reg-title" style="font-size: 1.05rem; font-weight: 700; margin-bottom: 8px; color: #ffffff;">Confirm Service Registration</h3>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;">
+                        The complete cURL command has been generated below. Would you like to execute the registration directly now, or copy it to run manually in your console?
+                    </p>
+                    <div id="modal-curl-command" class="curl-cmd" style="padding: 12px; font-size: 0.75rem; margin-bottom: 18px;"></div>
+                    <div style="display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;">
+                        <button type="button" class="btn-refresh" onclick="closeRegisterModal()">Cancel</button>
+                        <button type="button" class="btn-refresh" style="border-color: var(--accent-purple); color: #c4b5fd;" onclick="copyCurlForManual()">📋 Run Manually (Copy cURL)</button>
+                        <button type="button" id="modal-exec-btn" class="btn-reg btn-reg-agent" onclick="executePendingRegistration()">⚡ Execute Now</button>
+                    </div>
+                </dialog>
+
                 <script>
+                    let pendingRegRequest = null;
+
+                    function buildRegistrationDetails(type) {
+                        const isAgent = type === 'agent';
+                        const urlInput = document.getElementById(isAgent ? 'reg-agent-url' : 'reg-mcp-url');
+                        const chInput = document.getElementById(isAgent ? 'reg-agent-channels' : 'reg-mcp-channels');
+                        const rawUrl = (urlInput.value || '').trim() || (isAgent ? 'http://127.0.0.1:8104' : 'http://127.0.0.1:8102');
+                        const rawChannels = (chInput.value || '').trim() || '#public';
+                        const normalizedChannels = rawChannels.split(',').map(c => {
+                            const s = c.trim();
+                            if (!s) return '';
+                            return s.startsWith('#') ? s : '#' + s;
+                        }).filter(Boolean).join(',') || '#public';
+
+                        const encodedChannels = normalizedChannels.replace(/#/g, '%23');
+                        const baseOrigin = window.location.origin || 'http://127.0.0.1:8000';
+                        const endpointPath = isAgent ? '/register/agent' : '/register/mcp';
+                        const fullApiUrl = `${endpointPath}?url=${encodeURIComponent(rawUrl)}&channels=${encodeURIComponent(normalizedChannels)}`;
+                        const curlCmd = `curl -X POST "${baseOrigin}${endpointPath}?url=${rawUrl}&channels=${encodedChannels}"`;
+                        return { type, rawUrl, normalizedChannels, fullApiUrl, curlCmd };
+                    }
+
+                    function syncCurlPreview(type) {
+                        const details = buildRegistrationDetails(type);
+                        const previewEl = document.getElementById(type === 'agent' ? 'curl-agent-preview' : 'curl-mcp-preview');
+                        if (previewEl) {
+                            previewEl.textContent = details.curlCmd;
+                        }
+                    }
+
+                    function showRegStatus(message, isError = false) {
+                        const banner = document.getElementById('reg-status-banner');
+                        if (!banner) return;
+                        banner.style.display = 'block';
+                        banner.style.background = isError ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)';
+                        banner.style.border = isError ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(16, 185, 129, 0.35)';
+                        banner.style.color = isError ? '#fca5a5' : '#6ee7b7';
+                        banner.textContent = message;
+                    }
+
+                    function openRegisterPrompt(type) {
+                        syncCurlPreview(type);
+                        pendingRegRequest = buildRegistrationDetails(type);
+                        const modal = document.getElementById('register-confirm-modal');
+                        const titleEl = document.getElementById('modal-reg-title');
+                        const curlEl = document.getElementById('modal-curl-command');
+                        const execBtn = document.getElementById('modal-exec-btn');
+
+                        titleEl.textContent = type === 'agent' ? '🤖 Register A2A Agent' : '🛠️ Register MCP Server';
+                        curlEl.textContent = pendingRegRequest.curlCmd;
+                        execBtn.className = type === 'agent' ? 'btn-reg btn-reg-agent' : 'btn-reg btn-reg-mcp';
+
+                        if (modal && typeof modal.showModal === 'function') {
+                            modal.showModal();
+                        }
+                    }
+
+                    function closeRegisterModal() {
+                        const modal = document.getElementById('register-confirm-modal');
+                        if (modal && typeof modal.close === 'function') {
+                            modal.close();
+                        }
+                    }
+
+                    async function copyCurlForManual() {
+                        if (!pendingRegRequest) return;
+                        try {
+                            await navigator.clipboard.writeText(pendingRegRequest.curlCmd);
+                            showRegStatus('📋 cURL command copied to clipboard. You can now paste and run it manually in your console.', false);
+                        } catch (e) {
+                            showRegStatus('📋 Ready for manual execution. Copy the cURL command shown above and run it in your console.', false);
+                        }
+                        closeRegisterModal();
+                    }
+
+                    async function executePendingRegistration() {
+                        if (!pendingRegRequest) return;
+                        const req = pendingRegRequest;
+                        closeRegisterModal();
+                        showRegStatus(`⏳ Registering ${req.type.toUpperCase()} at ${req.rawUrl}...`, false);
+                        try {
+                            const res = await fetch(req.fullApiUrl, { method: 'POST' });
+                            const data = await res.json();
+                            if (res.ok) {
+                                showRegStatus(`✅ ${data.message || 'Successfully registered!'}`, false);
+                                updateRegistry();
+                                updateLogs();
+                            } else {
+                                showRegStatus(`❌ Registration failed (${res.status}): ${data.detail || JSON.stringify(data)}`, true);
+                            }
+                        } catch (err) {
+                            showRegStatus(`❌ Network error executing registration: ${err.message}`, true);
+                        }
+                    }
+
                     async function updateTokenMetrics() {
                         try {
                             const res = await fetch("/token-metrics");
@@ -1384,21 +1649,35 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                             if (agents.length === 0) {
                                 agentsContainer.innerHTML = '<div class="no-nodes">No dynamic agents registered.</div>';
                             } else {
-                                agentsContainer.innerHTML = agents.map(([id, item]) => `
-                                    <div class="node-card">
-                                        <div class="node-header">
-                                            <div class="node-name">${item.name}</div>
-                                            <span class="node-badge badge-agent">A2A Agent</span>
+                                agentsContainer.innerHTML = agents.map(([id, item]) => {
+                                    const rawChannels = (item.channels && item.channels.length > 0) ? item.channels : ['#public'];
+                                    const formattedChannels = rawChannels.map(c => String(c).startsWith('#') ? c : `#${c}`).join(', ');
+                                    const channelSet = new Set(rawChannels.map(c => String(c).replace(/^#+/, '').toLowerCase()));
+                                    const cleanTags = (item.tags || [])
+                                        .map(t => String(t).replace(/^#+/, '').trim())
+                                        .filter(t => t.length > 0 && !channelSet.has(t.toLowerCase()));
+
+                                    return `
+                                        <div class="node-card">
+                                            <div class="node-header">
+                                                <div class="node-name">${item.name}</div>
+                                                <span class="node-badge badge-agent">A2A Agent</span>
+                                            </div>
+                                            <div class="node-desc">${item.description || 'No description'}</div>
+                                            ${cleanTags.length > 0 ? `
+                                                <div class="node-tags">
+                                                    ${cleanTags.map(t => `<span class="node-tag">#${t}</span>`).join('')}
+                                                </div>
+                                            ` : ''}
+                                            <div class="node-channels-row">
+                                                registered at <span class="channel-list-badge">[${formattedChannels}]</span>
+                                            </div>
+                                            <div class="node-footer">
+                                                ENDPOINT: <span>${item.url}</span>
+                                            </div>
                                         </div>
-                                        <div class="node-desc">${item.description || 'No description'}</div>
-                                        <div class="node-tags">
-                                            ${(item.tags || []).map(t => `<span class="node-tag">#${t}</span>`).join('')}
-                                        </div>
-                                        <div class="node-footer">
-                                            ENDPOINT: <span>${item.url}</span>
-                                        </div>
-                                    </div>
-                                `).join('');
+                                    `;
+                                }).join('');
                             }
                             
                             // Render tools grouped by MCP Server / Node
@@ -1421,42 +1700,60 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                                     mcpServers[nodeId].tools.push([name, item]);
                                 });
                                 
-                                toolsContainer.innerHTML = Object.values(mcpServers).map(server => `
-                                    <div class="mcp-server-group" style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
-                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 10px;">
-                                            <div>
-                                                <div style="font-size: 0.95rem; font-weight: 700; color: #60a5fa; font-family: 'Outfit', sans-serif; display: flex; align-items: center; gap: 8px;">
-                                                    <span>🖥️ ${server.node_id}</span>
-                                                </div>
-                                                <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 2px;">
-                                                    MCP SERVER: <span style="font-family: 'JetBrains Mono', monospace; color: #cbd5e1;">${server.url}</span>
-                                                </div>
-                                            </div>
-                                            <div style="display: flex; gap: 6px; align-items: center;">
-                                                <span class="node-badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.4);">
-                                                    ${server.tools.length} ${server.tools.length === 1 ? 'Tool' : 'Tools'}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        
-                                        <div class="mcp-tools-list" style="display: flex; flex-direction: column; gap: 12px;">
-                                            ${server.tools.map(([name, item]) => `
-                                                <div class="node-card" style="background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.08); margin: 0;">
-                                                    <div class="node-header">
-                                                        <div class="node-name" style="font-family: 'JetBrains Mono', monospace; color: #f8fafc;">${name}</div>
-                                                        <span class="node-badge badge-tool">MCP TOOL</span>
+                                toolsContainer.innerHTML = Object.values(mcpServers).map(server => {
+                                    const srvChannels = (server.channels && server.channels.length > 0)
+                                        ? server.channels.map(c => String(c).startsWith('#') ? c : `#${c}`).join(', ')
+                                        : '#public';
+
+                                    return `
+                                        <div class="mcp-server-group" style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 10px;">
+                                                <div>
+                                                    <div style="font-size: 0.95rem; font-weight: 700; color: #60a5fa; font-family: 'Outfit', sans-serif; display: flex; align-items: center; gap: 8px;">
+                                                        <span>🖥️ ${server.node_id}</span>
                                                     </div>
-                                                    <div class="node-desc">${item.description || 'No description'}</div>
-                                                    ${(item.tags && item.tags.length > 0) ? `
-                                                        <div class="node-tags">
-                                                            ${item.tags.map(t => `<span class="node-tag">#${t}</span>`).join('')}
-                                                        </div>
-                                                    ` : ''}
+                                                    <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+                                                        <div>ENDPOINT: <span style="font-family: 'JetBrains Mono', monospace; color: #cbd5e1;">${server.url}</span></div>
+                                                        <span style="color: #475569;">•</span>
+                                                        <div>registered at <span class="channel-list-badge">[${srvChannels}]</span></div>
+                                                    </div>
                                                 </div>
-                                            `).join('')}
+                                                <div style="display: flex; gap: 6px; align-items: center;">
+                                                    <span class="node-badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.4);">
+                                                        ${server.tools.length} ${server.tools.length === 1 ? 'Tool' : 'Tools'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="mcp-tools-list" style="display: flex; flex-direction: column; gap: 12px;">
+                                                ${server.tools.map(([name, item]) => {
+                                                    const schemaProps = (item.input_schema && item.input_schema.properties)
+                                                        ? Object.keys(item.input_schema.properties).filter(p => p !== 'delegated_token')
+                                                        : [];
+                                                    const tagParams = (item.tags || [])
+                                                        .map(t => String(t).replace(/^#+/, '').trim())
+                                                        .filter(Boolean);
+                                                    const combinedParams = Array.from(new Set([...schemaProps, ...tagParams]));
+
+                                                    return `
+                                                        <div class="node-card" style="background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.08); margin: 0;">
+                                                            <div class="node-header">
+                                                                <div class="node-name" style="font-family: 'JetBrains Mono', monospace; color: #f8fafc;">${name}</div>
+                                                                <span class="node-badge badge-tool">MCP TOOL</span>
+                                                            </div>
+                                                            <div class="node-desc">${item.description || 'No description'}</div>
+                                                            ${combinedParams.length > 0 ? `
+                                                                <div class="node-params-row">
+                                                                    params <span class="params-list-badge">[${combinedParams.join(', ')}]</span>
+                                                                </div>
+                                                            ` : ''}
+                                                        </div>
+                                                    `;
+                                                }).join('')}
+                                            </div>
                                         </div>
-                                    </div>
-                                `).join('');
+                                    `;
+                                }).join('');
                             }
                             
                         } catch(e) {
@@ -1535,7 +1832,11 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         REGISTERED_NODES[node_id] = {
             "channels": channels,
             "public_key": None,
-            "prompt_hash": prompt_hash
+            "prompt_hash": prompt_hash,
+            "name": payload.get("name"),
+            "description": payload.get("description"),
+            "tags": payload.get("tags", []),
+            "examples": payload.get("examples", [])
         }
         add_system_log("REGISTRATION", node_id, "Initiated challenge-response handshake.")
         return {"challenge_bytes": challenge_bytes}
@@ -1976,6 +2277,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         new_agents = await discover_agents([url])
         if not new_agents:
+            if node_id and node_id in REGISTERED_NODES and not REGISTERED_NODES[node_id].get("url"):
+                del REGISTERED_NODES[node_id]
             add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for Agent at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover agent at {url}")
             
@@ -2066,6 +2369,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
 
         new_tools = await discover_tools([url])
         if not new_tools:
+            if node_id and node_id in REGISTERED_NODES and not REGISTERED_NODES[node_id].get("url"):
+                del REGISTERED_NODES[node_id]
             add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for MCP tools at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover MCP tools at {url}")
             

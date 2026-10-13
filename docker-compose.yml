@@ -13,9 +13,10 @@ services:
       # Enable OpenAI embeddings for semantic FAISS search
       - BFA_USE_MOCK_EMBEDDINGS=false
       - BFA_USE_OPENAI_EMBEDDINGS=true
+      - BFA_REGISTRY_DB_PATH=/app/data/bfa_registry_db.json
     volumes:
-      # Mounts registry database to persist registered agents and tools across restarts
-      - ./bfa_registry_db.json:/app/bfa_registry_db.json
+      # Mounts data directory to persist registered agents and tools across restarts without single-file mount issues
+      - ./data:/app/data
     networks:
       - irca
 

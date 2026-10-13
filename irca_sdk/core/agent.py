@@ -386,7 +386,15 @@ class IRCAAgent(abc.ABC):
                     except Exception as e:
                         print(f"BFAAgent Warning: Could not download gateway public key during registration: {e}")
 
-                init_payload = {"node_id": self.agent_id, "channels": self.channels}
+                init_payload = {
+                    "node_id": self.agent_id,
+                    "channels": self.channels,
+                    "name": self.name,
+                    "description": self.description,
+                    "tags": self.tags,
+                    "examples": self.examples,
+                    "url": self.url
+                }
                 if self.prompt_hash:
                     init_payload["prompt_hash"] = self.prompt_hash
                     

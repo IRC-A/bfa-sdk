@@ -19,6 +19,7 @@ build/
 # Local databases/persistences
 bfa_registry_db.json
 registered_endpoints.json
+data/
 
 # Node/React frontend & n8n nodes
 node_modules/
