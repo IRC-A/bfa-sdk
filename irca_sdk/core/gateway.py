@@ -476,6 +476,11 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         
     app = FastAPI(lifespan=lifespan)
     
+    # Silence raw HTTP access logs unless explicitly requested via BFA_ACCESS_LOG=true
+    if os.getenv("BFA_ACCESS_LOG", "false").lower() not in ("true", "1", "yes"):
+        import logging
+        logging.getLogger("uvicorn.access").disabled = True
+    
     from fastapi.middleware.cors import CORSMiddleware
     app.add_middleware(
         CORSMiddleware,
@@ -2725,14 +2730,18 @@ def main():
 
     import logging
 
-    class EndpointFilter(logging.Filter):
-        def filter(self, record: logging.LogRecord) -> bool:
-            msg = record.getMessage()
-            polling_paths = ["GET /skills", "GET /gateway-logs", "GET /token-metrics", "GET /logs"]
-            return not any(path in msg for path in polling_paths)
+    enable_access_log = os.getenv("BFA_ACCESS_LOG", "false").lower() in ("true", "1", "yes")
+    if not enable_access_log:
+        logging.getLogger("uvicorn.access").disabled = True
+    else:
+        class EndpointFilter(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                msg = record.getMessage()
+                polling_paths = ["GET /skills", "GET /gateway-logs", "GET /token-metrics", "GET /logs"]
+                return not any(path in msg for path in polling_paths)
 
-    logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+        logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
     gateway_app = create_gateway_app()
-    uvicorn.run(gateway_app, host=host, port=port)
+    uvicorn.run(gateway_app, host=host, port=port, access_log=enable_access_log)
 

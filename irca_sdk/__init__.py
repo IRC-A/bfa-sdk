@@ -5,38 +5,37 @@
 """
 BFA SDK: A lightweight framework for Backend for Agents (BFA) architecture with FAISS semantic routing.
 """
+import os
 import logging
 
-class _SilentProbeFilter(logging.Filter):
-    SILENT_PATHS = {"/tools", "/ping", "/health", "/.well-known/agent-card.json"}
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = getattr(record, "args", None)
-        if isinstance(args, tuple) and len(args) >= 3:
-            _, method, full_path, *_ = args
-            path = str(full_path).split("?", 1)[0]
-            if path in self.SILENT_PATHS and method == "GET":
+enable_access_log = os.getenv("BFA_ACCESS_LOG", "false").lower() in ("true", "1", "yes")
+
+if not enable_access_log:
+    logging.getLogger("uvicorn.access").disabled = True
+    try:
+        import uvicorn.config
+        if "loggers" in uvicorn.config.LOGGING_CONFIG and "uvicorn.access" in uvicorn.config.LOGGING_CONFIG["loggers"]:
+            uvicorn.config.LOGGING_CONFIG["loggers"]["uvicorn.access"]["handlers"] = []
+    except Exception:
+        pass
+else:
+    class _SilentProbeFilter(logging.Filter):
+        SILENT_PATHS = {"/tools", "/ping", "/health", "/.well-known/agent-card.json"}
+        def filter(self, record: logging.LogRecord) -> bool:
+            args = getattr(record, "args", None)
+            if isinstance(args, tuple) and len(args) >= 3:
+                _, method, full_path, *_ = args
+                path = str(full_path).split("?", 1)[0]
+                if path in self.SILENT_PATHS and method == "GET":
+                    return False
+            msg = record.getMessage()
+            if any(f" {p} " in msg or f'"{p}' in msg or f"'{p}'" in msg for p in self.SILENT_PATHS) and "POST" not in msg:
                 return False
-        msg = record.getMessage()
-        if any(f" {p} " in msg or f'"{p}' in msg or f"'{p}'" in msg for p in self.SILENT_PATHS) and "POST" not in msg:
-            return False
-        return True
+            return True
 
-logging.getLogger("uvicorn.access").addFilter(_SilentProbeFilter())
+    logging.getLogger("uvicorn.access").addFilter(_SilentProbeFilter())
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
-try:
-    import uvicorn.config
-    if "filters" not in uvicorn.config.LOGGING_CONFIG:
-        uvicorn.config.LOGGING_CONFIG["filters"] = {}
-    uvicorn.config.LOGGING_CONFIG["filters"]["irca_probe_filter"] = {
-        "()": lambda: _SilentProbeFilter()
-    }
-    if "access" in uvicorn.config.LOGGING_CONFIG.get("handlers", {}):
-        access_filters = uvicorn.config.LOGGING_CONFIG["handlers"]["access"].setdefault("filters", [])
-        if "irca_probe_filter" not in access_filters:
-            access_filters.append("irca_probe_filter")
-except Exception:
-    pass
 
 from irca_sdk.core.agent import IRCAAgent, BFAAgent
 from irca_sdk.core.interactive_agent import IRCAInteractiveAgent, BFAInteractiveAgent
