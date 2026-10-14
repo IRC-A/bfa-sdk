@@ -38,8 +38,9 @@ AGGREGATED_TOKENS = {
 
 def add_system_log(event_type: str, source: str, message: str, details: Any = None):
     import time
+    t_str = time.strftime("%H:%M:%S")
     log_entry = {
-        "timestamp": time.strftime("%H:%M:%S"),
+        "timestamp": t_str,
         "event_type": event_type, # "REGISTRATION", "DISCOVERY", "EXECUTION", "SYSTEM", "ERROR"
         "source": source,
         "message": message,
@@ -48,6 +49,10 @@ def add_system_log(event_type: str, source: str, message: str, details: Any = No
     SYSTEM_LOGS.append(log_entry)
     if len(SYSTEM_LOGS) > 200:
         SYSTEM_LOGS.pop(0)
+    
+    # Clean semantic log output for Docker & console observability
+    det_str = f" | {details}" if details else ""
+    print(f"[{t_str}] [{event_type}] [{source}] {message}{det_str}", flush=True)
 
 # Configurable parameter extractors to map natural language query patterns to DET parameters.
 # In a production environment, this can be customized in BFAConfig or loaded dynamically.
