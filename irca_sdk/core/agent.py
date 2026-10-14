@@ -646,21 +646,47 @@ class IRCAAgent(abc.ABC):
         intent: Optional[str] = None,
         params: Optional[Dict[str, Any]] = None,
         threshold: Optional[float] = None,
-        query: Optional[str] = None
+        query: Optional[str] = None,
+        decompose: bool = True
     ) -> Dict[str, Any]:
         """
         Universal 3-Phase Assistance Protocol for all BFA/IRC-A Agents:
-        1. Phase 1 - Discover: Inquires BFA Gateway if any agent or tool can help within
-           the calling agent's authorized channels, and retrieves the required input_schema.
+        1. Phase 1 - Discover: Inquires BFA Gateway with atomic clean intent (NO parameters)
+           to check if any agent/tool can help within caller's authorized channels and get input_schema.
            If no helper is available, returns helper_available=False immediately.
         2. Phase 2 - Authorize: Calls BFA Gateway /authorize with concrete parameters,
-           verifying parameter lockdown and obtaining the ephemeral signed DET and target endpoint.
+           verifying parameter lockdown and obtaining ephemeral signed DET and target endpoint.
         3. Phase 3 - Execution: Invokes the peer agent or tool directly Peer-to-Peer (P2P)
            presenting the signed DET token.
+        Supports TaskQueue decomposition for composite multi-step requests.
         """
         actual_intent = intent or query
         if not actual_intent:
             raise ValueError("IRCAAgent: 'intent' or 'query' must be provided to request_assistance.")
+
+        from irca_sdk.core.task_queue import TaskQueue, SubTask
+
+        # 1. If decomposition is enabled and composite tasks or parameters are present:
+        if decompose:
+            queue = TaskQueue.from_prompt(self, actual_intent, common_params=params)
+            if len(queue.tasks) > 1:
+                queue_res = await queue.execute()
+                first_completed = next((t for t in queue.tasks if t.status == "completed"), None)
+                return {
+                    "status": queue_res["status"],
+                    "helper_available": queue_res["completed_tasks"] > 0,
+                    "target": "composite_task_queue",
+                    "type": "composite",
+                    "endpoint": first_completed.endpoint if first_completed else None,
+                    "det": first_completed.det if first_completed else None,
+                    "result": queue_res["combined_summary"],
+                    "queue_details": queue_res
+                }
+            elif len(queue.tasks) == 1:
+                # Use clean intent (without parameters) for Phase 1 Discover
+                clean_task = queue.tasks[0]
+                actual_intent = clean_task.intent
+                params = clean_task.params
 
         match = await self.discover_capability(actual_intent, threshold=threshold)
         if not match:
@@ -675,7 +701,9 @@ class IRCAAgent(abc.ABC):
         target_endpoint = match.get("endpoint") or match.get("url")
         target_type = match.get("type", "agent")
         input_schema = match.get("input_schema", {})
-        call_params = params or {}
+        
+        st = SubTask(intent=actual_intent, params=params)
+        call_params = st.bind_params_to_schema(input_schema) if input_schema else (params or {})
 
         auth_info = await self.authorize_execution(intent=actual_intent, tool=tool_name, args=call_params)
         det = auth_info.get("det")

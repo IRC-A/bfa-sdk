@@ -2558,6 +2558,9 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         elif not caller_channels and caller_id and caller_id in REGISTERED_NODES:
             caller_channels = REGISTERED_NODES[caller_id].get("channels")
 
+        if not caller_channels:
+            caller_channels = ["#public"]
+
         req_threshold = payload.get("threshold") if (payload and payload.get("threshold") is not None) else CONFIG.semantic_threshold
         result = ROUTER.resolve(
             query, 

@@ -134,8 +134,13 @@ class BFASemanticRouter:
                 norm_agent_channels = {str(c).strip().lstrip("#").lower() for c in agent_channels if c}
                 norm_item_channels = {str(c).strip().lstrip("#").lower() for c in item_channels if c}
                 
-                is_public = not norm_item_channels or "public" in norm_item_channels or not norm_agent_channels or "public" in norm_agent_channels
-                if not is_public and not norm_agent_channels.intersection(norm_item_channels):
+                # Logical Channel Masking:
+                # A target item is accessible if it is public (#public or empty channels),
+                # OR if the caller shares at least one channel with the target item.
+                # A caller having #public does NOT grant access to private channels.
+                item_is_public = not norm_item_channels or "public" in norm_item_channels
+                has_channel_overlap = bool(norm_agent_channels.intersection(norm_item_channels))
+                if not item_is_public and not has_channel_overlap:
                     continue
 
             # Convert L2 distance squared to Cosine Similarity in [0.0, 1.0] range

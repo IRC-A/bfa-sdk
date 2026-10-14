@@ -1473,6 +1473,210 @@ async def test_irca_agent_request_assistance_and_delegate_task(monkeypatch):
     assert "No helper available" in del_none
 
 
+def test_strict_channel_masking_caller_on_public():
+    """
+    Verifies that a caller having #public does NOT gain wildcard access to private channels
+    such as #gerencia or #reportes.
+    """
+    from irca_sdk.router.search import BFASemanticRouter
+    from irca_sdk.router.embedder import DummyEmbedder
+
+    router = BFASemanticRouter(embedder=DummyEmbedder())
+    
+    # 1. Register private reportes agent on #gerencia, #reportes
+    router.update_registry({
+        "reportes_agent": {
+            "name": "Agente de Reportes",
+            "description": "Reportes de gestión hotelera y disponibilidad",
+            "type": "agent",
+            "url": "http://127.0.0.1:8220",
+            "channels": ["#gerencia", "#reportes"]
+        },
+        "public_faq_tool": {
+            "name": "FAQ Tool",
+            "description": "Preguntas frecuentes del hotel",
+            "type": "tool",
+            "url": "http://127.0.0.1:8001",
+            "channels": ["#public"]
+        }
+    })
+    router.build_index()
+
+    # 2. Caller has #reservas and #public
+    # Must NOT be able to access reportes_agent
+    res_private = router.resolve(
+        query="Reportes de gestión hotelera y disponibilidad",
+        filter_type="agent",
+        agent_channels=["#public", "#reservas"]
+    )
+    assert res_private["best"] is None
+    assert len(res_private["candidates"]) == 0
+
+    # 3. Caller with #reportes CAN access reportes_agent
+    res_auth = router.resolve(
+        query="Reportes de gestión hotelera y disponibilidad",
+        filter_type="agent",
+        agent_channels=["#reportes"]
+    )
+    assert res_auth["best"] is not None
+    assert res_auth["best"]["skill"] == "reportes_agent"
+
+    # 4. Caller with #public CAN access public_faq_tool
+    res_public = router.resolve(
+        query="Preguntas frecuentes del hotel",
+        filter_type="tool",
+        agent_channels=["#public"]
+    )
+    assert res_public["best"] is not None
+    assert res_public["best"]["skill"] == "public_faq_tool"
+
+
+@pytest.mark.anyio
+async def test_task_queue_composite_prompt_decomposition(monkeypatch):
+    """
+    Tests decomposition of composite prompt into atomic tasks with TaskQueue:
+    - Extracts parameters (dates, guests, property_id)
+    - Separates into clean intents without parameters
+    - Sequentially executes Discover (clean intent, no params) -> Authorize (bound params) -> P2P
+    """
+    from irca_sdk.core.task_queue import decompose_prompt_to_tasks, extract_parameters_from_text, TaskQueue
+    from irca_sdk.core.agent import BFAAgent
+
+    prompt = "check room availability and rates for check-in 2026-10-15 check-out 2026-10-16 for 2 guests for hotel propertyId 348311"
+    
+    # 1. Parameter extraction check
+    params = extract_parameters_from_text(prompt)
+    assert params["check_in"] == "2026-10-15"
+    assert params["check_out"] == "2026-10-16"
+    assert params["guests"] == 2
+    assert params["property_id"] == "348311"
+
+    # 2. Task decomposition check
+    tasks = decompose_prompt_to_tasks(prompt)
+    assert len(tasks) == 2
+    assert tasks[0].intent == "check room availability"
+    assert tasks[1].intent == "check room rates"
+    # Ensure parameters are in both tasks
+    assert tasks[0].params["check_in"] == "2026-10-15"
+    assert tasks[1].params["check_in"] == "2026-10-15"
+
+    # 3. End-to-end TaskQueue execution check with agent
+    class MockReservasAgent(BFAAgent):
+        async def run(self, user_message, context):
+            return "ok"
+
+    agent = MockReservasAgent(
+        agent_id="reservas-test-agent",
+        name="Reservas Agent",
+        description="Agente de reservas",
+        tags=["reservas"],
+        examples=["reservar"],
+        url="http://localhost:8210",
+        channels=["#reservas"]
+    )
+    agent.session_token = "mock-tok"
+    agent.gateway_url = "http://mock-gw:8000"
+
+    discovered_intents = []
+    authorized_calls = []
+
+    import httpx
+    async def mock_post(self_client, url, json=None, headers=None, **kwargs):
+        class MockResponse:
+            def __init__(self, status_code, data):
+                self.status_code = status_code
+                self._data = data
+                self.text = "mock"
+            def json(self):
+                return self._data
+
+        if "/discover" in url:
+            intent = json.get("intent")
+            discovered_intents.append(intent)
+            if "availability" in intent:
+                return MockResponse(200, {
+                    "match": {
+                        "node_id": "pms-mcp",
+                        "tool": "get_availability",
+                        "endpoint": "http://mock-pms:3001",
+                        "type": "tool",
+                        "input_schema": {
+                            "properties": {
+                                "propertyId": {"type": "string"},
+                                "checkIn": {"type": "string"},
+                                "checkOut": {"type": "string"},
+                                "guests": {"type": "integer"}
+                            }
+                        }
+                    }
+                })
+            elif "rates" in intent:
+                return MockResponse(200, {
+                    "match": {
+                        "node_id": "pms-mcp",
+                        "tool": "get_rates",
+                        "endpoint": "http://mock-pms:3001",
+                        "type": "tool",
+                        "input_schema": {
+                            "properties": {
+                                "propertyId": {"type": "string"},
+                                "checkIn": {"type": "string"},
+                                "checkOut": {"type": "string"}
+                            }
+                        }
+                    }
+                })
+            return MockResponse(404, {})
+        elif "/authorize" in url:
+            authorized_calls.append(json)
+            return MockResponse(200, {
+                "status": "success",
+                "det": f"det-for-{json.get('tool')}",
+                "endpoint": "http://mock-pms:3001",
+                "type": "tool",
+                "restricted_params": json.get("args")
+            })
+        elif "/tools" in url:
+            tool_called = json.get("tool")
+            if tool_called == "get_availability":
+                return MockResponse(200, {"available_rooms": ["Deluxe Suite 101", "Standard Chalet 102"]})
+            elif tool_called == "get_rates":
+                return MockResponse(200, {"rate_per_night": 120.0, "total": 240.0})
+
+        return MockResponse(404, {})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    # Execute request_assistance with composite prompt
+    res = await agent.request_assistance(intent=prompt)
+
+    # 1. Discover received clean intent WITHOUT parameters
+    assert "check room availability" in discovered_intents
+    assert "check room rates" in discovered_intents
+    # Verify no raw parameter dates were in Discover intents
+    for disc_intent in discovered_intents:
+        assert "2026-10-15" not in disc_intent
+        assert "propertyId" not in disc_intent
+
+    # 2. Authorize received correctly mapped camelCase parameters from input_schema
+    avail_auth = next(a for a in authorized_calls if a["tool"] == "get_availability")
+    assert avail_auth["args"]["propertyId"] == "348311"
+    assert avail_auth["args"]["checkIn"] == "2026-10-15"
+    assert avail_auth["args"]["checkOut"] == "2026-10-16"
+    assert avail_auth["args"]["guests"] == 2
+
+    rates_auth = next(a for a in authorized_calls if a["tool"] == "get_rates")
+    assert rates_auth["args"]["propertyId"] == "348311"
+    assert rates_auth["args"]["checkIn"] == "2026-10-15"
+
+    # 3. Overall result assembled
+    assert res["status"] == "success"
+    assert res["type"] == "composite"
+    assert "Deluxe Suite 101" in str(res["result"])
+    assert "120.0" in str(res["result"])
+
+
+
 
 
 
