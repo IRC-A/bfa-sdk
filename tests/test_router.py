@@ -145,4 +145,49 @@ def test_cognitive_first_agent_priority():
     assert res_tool["best"]["skill"] == "pms_tool"
 
 
+def test_circular_loop_multi_node_exclusion():
+    embedder = DummyEmbedder()
+    router = BFASemanticRouter(embedder)
+    
+    registry_data = {
+        "pms_tool": {
+            "name": "Check Availability Tool",
+            "description": "PMS tool that checks hotel room availability for dates.",
+            "url": "http://127.0.0.1:3001/tools",
+            "tags": ["room", "availability", "hotel"],
+            "examples": ["check room availability", "hotel room availability"],
+            "type": "tool"
+        },
+        "reservas_agent": {
+            "name": "Reservas Specialist Agent",
+            "description": "Cognitive specialist agent managing hotel reservations, policies and availability.",
+            "url": "http://127.0.0.1:8210",
+            "tags": ["reservas", "availability", "booking"],
+            "examples": ["check room availability", "manage bookings"],
+            "type": "agent"
+        },
+        "atencion_agent": {
+            "name": "Guest Attention Agent",
+            "description": "Guest attention coordinator handling guest requests and booking questions.",
+            "url": "http://127.0.0.1:8200",
+            "tags": ["guest", "attention", "availability"],
+            "examples": ["check room availability", "help guest"],
+            "type": "agent"
+        }
+    }
+    router.update_registry(registry_data)
+    router.build_index()
+
+    # When both agents are in the visited trace, resolution falls back to pms_tool
+    res = router.resolve("check room availability", threshold=0.1, exclude_node_id=["atencion_agent", "reservas_agent"])
+    assert res["type"] == "semantic_faiss"
+    assert res["best"]["type"] == "tool"
+    assert res["best"]["skill"] == "pms_tool"
+
+    # Also test comma-separated string format
+    res_str = router.resolve("check room availability", threshold=0.1, exclude_node_id="atencion_agent,reservas_agent")
+    assert res_str["type"] == "semantic_faiss"
+    assert res_str["best"]["skill"] == "pms_tool"
+
+
 

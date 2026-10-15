@@ -484,7 +484,11 @@ class IRCAAgent(abc.ABC):
         self,
         intent: str,
         candidates: int = 1,
-        threshold: Optional[float] = None
+        threshold: Optional[float] = None,
+        filter_type: Optional[str] = None,
+        prefer: Optional[str] = None,
+        visited_nodes: Optional[List[str]] = None,
+        trace_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Phase 1 - Capability Inquiry (IRC-A Protocol v1.3.0).
@@ -499,16 +503,26 @@ class IRCAAgent(abc.ABC):
         if not self.session_token:
             await self.register_with_gateway(self.gateway_url)
 
+        v_nodes = list(visited_nodes or [])
+        if self.agent_id not in v_nodes:
+            v_nodes.append(self.agent_id)
+
         discover_url = f"{self.gateway_url.rstrip('/')}/discover"
         payload = {
             "intent": intent,
             "query": intent,
             "candidates": candidates,
             "session_token": self.session_token,
-            "exclude_node_id": self.agent_id
+            "exclude_node_id": ",".join(v_nodes),
+            "exclude_nodes": v_nodes,
+            "visited_nodes": v_nodes
         }
         if threshold is not None:
             payload["threshold"] = threshold
+        if filter_type:
+            payload["filter_type"] = filter_type
+        if prefer:
+            payload["prefer"] = prefer
 
         headers = {}
         if self.session_token:
@@ -517,6 +531,9 @@ class IRCAAgent(abc.ABC):
             headers["x-channels"] = ",".join(self.channels)
         if self.agent_id:
             headers["x-node-id"] = self.agent_id
+        if trace_id:
+            headers["x-trace-id"] = trace_id
+        headers["x-visited-nodes"] = ",".join(v_nodes)
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(discover_url, json=payload, headers=headers)
@@ -532,7 +549,11 @@ class IRCAAgent(abc.ABC):
         intent: str,
         tool: str,
         args: Dict[str, Any],
-        idempotency_key: Optional[str] = None
+        idempotency_key: Optional[str] = None,
+        filter_type: Optional[str] = None,
+        prefer: Optional[str] = None,
+        visited_nodes: Optional[List[str]] = None,
+        trace_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Phase 2 - Authorization (IRC-A Protocol v1.3.0).
@@ -546,14 +567,25 @@ class IRCAAgent(abc.ABC):
         if not self.session_token:
             await self.register_with_gateway(self.gateway_url)
 
+        v_nodes = list(visited_nodes or [])
+        if self.agent_id not in v_nodes:
+            v_nodes.append(self.agent_id)
+
         auth_url = f"{self.gateway_url.rstrip('/')}/authorize"
         payload = {
             "intent": intent,
             "tool": tool,
             "args": args,
             "session_token": self.session_token,
-            "exclude_node_id": self.agent_id
+            "exclude_node_id": ",".join(v_nodes),
+            "exclude_nodes": v_nodes,
+            "visited_nodes": v_nodes
         }
+        if filter_type:
+            payload["filter_type"] = filter_type
+        if prefer:
+            payload["prefer"] = prefer
+
         headers = {}
         if self.session_token:
             headers["Authorization"] = f"Bearer {self.session_token}"
@@ -563,6 +595,9 @@ class IRCAAgent(abc.ABC):
             headers["x-node-id"] = self.agent_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        if trace_id:
+            headers["x-trace-id"] = trace_id
+        headers["x-visited-nodes"] = ",".join(v_nodes)
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(auth_url, json=payload, headers=headers)
@@ -577,7 +612,9 @@ class IRCAAgent(abc.ABC):
         args: Dict[str, Any],
         det: str,
         is_tool: bool = True,
-        intent: Optional[str] = None
+        intent: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        visited_nodes: Optional[List[str]] = None
     ) -> Any:
         """
         Direct Peer-to-Peer mTLS / HTTP invocation to target node presenting the signed DET token.
@@ -589,6 +626,11 @@ class IRCAAgent(abc.ABC):
         elif not os.path.exists("/.dockerenv") and "host.docker.internal" in endpoint:
             target_urls.append(endpoint.replace("host.docker.internal", "127.0.0.1"))
 
+        v_nodes = list(visited_nodes or [])
+        if self.agent_id not in v_nodes:
+            v_nodes.append(self.agent_id)
+        visited_header = ",".join(v_nodes)
+
         last_error = None
         async with httpx.AsyncClient(timeout=30.0) as client:
             for url in target_urls:
@@ -598,9 +640,13 @@ class IRCAAgent(abc.ABC):
                         prepared_args = dict(args) if isinstance(args, dict) else {"query": args}
                         prepared_args["_det"] = det
                         prepared_args["delegated_token"] = det
+                        tool_headers = {"x-visited-nodes": visited_header}
+                        if trace_id:
+                            tool_headers["x-trace-id"] = trace_id
                         res = await client.post(
                             tools_url,
-                            json={"tool": tool_or_action, "arguments": prepared_args}
+                            json={"tool": tool_or_action, "arguments": prepared_args},
+                            headers=tool_headers
                         )
                         if res.status_code == 200:
                             return res.json()
@@ -610,8 +656,11 @@ class IRCAAgent(abc.ABC):
                             "Authorization": f"Bearer {det}",
                             "x-det": det,
                             "x-irca-det": det,
-                            "A2A-Version": "1.0"
+                            "A2A-Version": "1.0",
+                            "x-visited-nodes": visited_header
                         }
+                        if trace_id:
+                            headers["x-trace-id"] = trace_id
                         if isinstance(args, dict) and "jsonrpc" in args and "method" in args:
                             a2a_body = args
                         else:

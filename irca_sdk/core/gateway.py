@@ -1982,7 +1982,17 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
 
     @app.post("/discover")
-    async def discover(query: str = None, intent: str = None, candidates: int = 1, threshold: float = None, exclude_node_id: str = None, filter_type: str = None, prefer: str = "agent", payload: Dict[str, Any] = None):
+    async def discover(
+        request: Request = None,
+        query: str = None,
+        intent: str = None,
+        candidates: int = 1,
+        threshold: float = None,
+        exclude_node_id: str = None,
+        filter_type: str = None,
+        prefer: str = "agent",
+        payload: Dict[str, Any] = None
+    ):
         """
         Phase 1 - Capability Inquiry (IRC-A Protocol v1.3.0).
         Stateless lookup: Asks 'who can solve this, and what parameters do they need?'.
@@ -2016,7 +2026,22 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             
         await prune_dead_endpoints()
             
-        effective_exclude_id = exclude_node_id or payload.get("exclude_node_id") or caller_id
+        # Collect all nodes to exclude: caller, explicit exclusions, and visited nodes trace
+        visited_header = request.headers.get("x-visited-nodes", "") if request else ""
+        visited_nodes = [x.strip() for x in visited_header.split(",") if x.strip()]
+        
+        raw_exclude = exclude_node_id or payload.get("exclude_nodes") or payload.get("exclude_node_id") or payload.get("visited_nodes")
+        exclude_list = []
+        if isinstance(raw_exclude, list):
+            exclude_list.extend(raw_exclude)
+        elif isinstance(raw_exclude, str):
+            exclude_list.extend([x.strip() for x in raw_exclude.split(",") if x.strip()])
+            
+        all_exclusions = set(visited_nodes) | set(exclude_list)
+        if caller_id:
+            all_exclusions.add(caller_id)
+            
+        effective_exclude_id = list(all_exclusions)
         req_threshold = threshold if threshold is not None else (payload.get("threshold") if payload.get("threshold") is not None else CONFIG.semantic_threshold)
         req_candidates = candidates if candidates and candidates > 1 else payload.get("candidates", 1)
         req_filter_type = filter_type or payload.get("filter_type") or payload.get("type")
@@ -2147,6 +2172,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
 
     @app.post("/authorize")
     async def authorize(
+        request: Request = None,
         payload: Dict[str, Any] = None,
         idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
         authorization: Optional[str] = Header(None, alias="Authorization")
@@ -2194,8 +2220,23 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="Gateway not ready")
 
         await prune_dead_endpoints()
-
-        effective_exclude_id = payload.get("exclude_node_id") or caller_id
+ 
+        # Collect all nodes to exclude: caller, explicit exclusions, and visited nodes trace
+        visited_header = request.headers.get("x-visited-nodes", "") if request else ""
+        visited_nodes = [x.strip() for x in visited_header.split(",") if x.strip()]
+        
+        raw_exclude = payload.get("exclude_nodes") or payload.get("exclude_node_id") or payload.get("visited_nodes")
+        exclude_list = []
+        if isinstance(raw_exclude, list):
+            exclude_list.extend(raw_exclude)
+        elif isinstance(raw_exclude, str):
+            exclude_list.extend([x.strip() for x in raw_exclude.split(",") if x.strip()])
+            
+        all_exclusions = set(visited_nodes) | set(exclude_list)
+        if caller_id:
+            all_exclusions.add(caller_id)
+            
+        effective_exclude_id = list(all_exclusions)
 
         # Re-resolve capability or find direct tool match
         target_item = None

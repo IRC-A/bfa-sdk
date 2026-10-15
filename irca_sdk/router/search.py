@@ -116,14 +116,22 @@ class BFASemanticRouter:
             skill_id = self.index_keys[idx]
             item = self.registry[skill_id]
 
-            # Filter out self-referential calling node if exclude_node_id is provided
+            # Filter out self-referential calling node or visited nodes to prevent circular loops
             if exclude_node_id:
+                if isinstance(exclude_node_id, (list, tuple, set)):
+                    excluded_set = {str(x).strip().lower() for x in exclude_node_id if x}
+                else:
+                    excluded_set = {str(x).strip().lower() for x in str(exclude_node_id).split(",") if x.strip()}
+
                 target_node_id = str(item.get("node_id") or "").strip().lower()
                 target_url = str(item.get("url") or item.get("server_url") or "").strip().lower()
-                ex_clean = str(exclude_node_id).strip().lower()
-                if (ex_clean == str(skill_id).strip().lower() or
-                    ex_clean == target_node_id or
-                    (ex_clean and ex_clean in target_url)):
+                target_skill = str(skill_id).strip().lower()
+                target_name = str(item.get("name") or "").strip().lower()
+
+                if (target_skill in excluded_set or
+                    target_node_id in excluded_set or
+                    target_name in excluded_set or
+                    any(ex and (ex == target_node_id or ex in target_url or ex == target_skill or ex == target_name) for ex in excluded_set)):
                     continue
 
             # Filter by type if requested
