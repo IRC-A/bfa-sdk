@@ -2087,6 +2087,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         if not target_prompt_hash:
             target_prompt_hash = best["data"].get("prompt_hash")
 
+        permitted_action = tool_name
+
         import uuid
         det_expiry = int(time.time()) + 120
         det_claims = {
@@ -2094,7 +2096,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "iss": "irca-gateway",
             "sub": caller_id,
             "aud": target_node_id,
-            "permitted_action": tool_name,
+            "permitted_action": permitted_action,
             "restricted_params": restricted_params,
             "exp": det_expiry,
             "iat": int(time.time())
@@ -2235,6 +2237,18 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         target_url = target_item.get("url") or target_item.get("server_url")
         target_prompt_hash = REGISTERED_NODES.get(target_node_id, {}).get("prompt_hash") or target_item.get("prompt_hash")
 
+        if target_type == "agent":
+            # Cognitive agents process natural language / SendMessage.
+            # Parameter lockdown is only enforced if the agent declared a strict input_schema with properties.
+            target_schema = target_item.get("input_schema") or {}
+            declared_properties = target_schema.get("properties", {})
+            if declared_properties:
+                restricted_params = {k: v for k, v in (args or {}).items() if k in declared_properties}
+            else:
+                restricted_params = {}
+        else:
+            restricted_params = args or {}
+
         import uuid
         det_expiry = int(time.time()) + 120
         det_claims = {
@@ -2243,7 +2257,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "sub": caller_id,
             "aud": target_node_id,
             "permitted_action": permitted_action,
-            "restricted_params": args,
+            "restricted_params": restricted_params,
             "exp": det_expiry,
             "iat": int(time.time())
         }
@@ -2257,7 +2271,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
 
         base_tools_url = target_url.rstrip("/") + "/tools" if target_type == "tool" and not target_url.endswith("/tools") else target_url
 
-        prepared_args = dict(args)
+        prepared_args = dict(restricted_params)
         prepared_args["delegated_token"] = det
 
         prepared_call = {
@@ -2271,20 +2285,23 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "url": target_url,
             "method": "POST",
             "headers": {"Authorization": f"Bearer {det}"},
-            "body": {"query": intent or tool_name, "params": args}
+            "body": {"query": intent or tool_name, "params": restricted_params}
         }
 
-        add_system_log("AUTHORIZATION", caller_id, f"Authorized execution for '{caller_id}' -> target '{target_node_id}' with restricted_params: {args}")
+        add_system_log("AUTHORIZATION", caller_id, f"Authorized execution for '{caller_id}' -> target '{target_node_id}' with restricted_params: {restricted_params}")
 
         return {
             "status": "success",
             "det": det,
+            "delegation_token": det,
             "endpoint": target_url,
             "url": target_url,
             "target_node_id": target_node_id,
+            "target": target_node_id,
             "tool": permitted_action,
             "type": target_type,
-            "restricted_params": args,
+            "permitted_action": permitted_action,
+            "restricted_params": restricted_params,
             "expires_in": 120,
             "prepared_call": prepared_call
         }

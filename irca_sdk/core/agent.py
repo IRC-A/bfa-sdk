@@ -117,12 +117,27 @@ class IRCADETValidationMiddleware(BaseHTTPMiddleware):
                         if isinstance(v, (str, int, float, bool)):
                             runtime_args[k] = v
                     
-                    # 2. Support extraction from standard A2A SendMessage text parts
+                    # 2. Support extraction from standard A2A SendMessage text parts and metadata
                     msg = params.get("message", {})
                     if isinstance(msg, dict):
+                        metadata = msg.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            for k, v in metadata.items():
+                                if isinstance(v, (str, int, float, bool)) and k not in runtime_args:
+                                    runtime_args[k] = v
+
                         parts = msg.get("parts", [])
                         if parts and isinstance(parts[0], dict):
                             query_text = parts[0].get("text", "")
+                            try:
+                                parsed = json.loads(query_text)
+                                if isinstance(parsed, dict):
+                                    for k, v in parsed.items():
+                                        if isinstance(v, (str, int, float, bool)) and k not in runtime_args:
+                                            runtime_args[k] = v
+                            except Exception:
+                                pass
+
                             import re
                             # Apply dynamically configured regex extractors on the agent instance
                             extractors = getattr(self.agent_instance, "parameter_extractors", {})
@@ -623,6 +638,10 @@ class IRCAAgent(abc.ABC):
                                 },
                                 "id": 1
                             }
+                            if isinstance(args, dict):
+                                for k, v in args.items():
+                                    if k not in a2a_body["params"] and isinstance(v, (str, int, float, bool)):
+                                        a2a_body["params"][k] = v
                         res = await client.post(
                             url,
                             json=a2a_body,
@@ -816,14 +835,14 @@ class IRCAAgent(abc.ABC):
             
             # Audience validation
             aud = decoded_det.get("aud")
-            valid_audiences = (self.agent_id, expected_function, "agent", self.url)
+            valid_audiences = (self.agent_id, expected_function, "agent", self.url, getattr(self, "name", None))
             if aud and aud not in valid_audiences:
                 print(f"BFAAgent verify_incoming_det failed: aud '{aud}' not in {valid_audiences}")
                 return False
 
             # Scope validation
             permitted = decoded_det.get("permitted_action")
-            valid_actions = (expected_function, "SendMessage", self.agent_id)
+            valid_actions = (expected_function, "SendMessage", self.agent_id, getattr(self, "name", None))
             if permitted and permitted not in valid_actions:
                 print(f"BFAAgent verify_incoming_det failed: permitted_action '{permitted}' not in {valid_actions}")
                 return False
