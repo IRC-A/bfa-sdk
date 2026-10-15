@@ -230,7 +230,8 @@ class IRCAAgent(abc.ABC):
         gateway_url: str = None,
         parameter_extractors: Optional[Dict[str, str]] = None,
         prompt_template: Optional[str] = None,
-        channels: Optional[List[str]] = None
+        channels: Optional[List[str]] = None,
+        default_prefer: str = "tool"
     ):
         self.agent_id = agent_id
         self.name = name
@@ -241,6 +242,7 @@ class IRCAAgent(abc.ABC):
         self.version = version
         self.gateway_url = gateway_url or os.getenv("BFA_GATEWAY_URL")
         self.replay_cache = ReplayPreventionCache()
+        self.default_prefer = default_prefer
         
         self.prompt_template = prompt_template
         self.prompt_hash = hashlib.sha256(prompt_template.encode("utf-8")).hexdigest() if prompt_template is not None else None
@@ -521,8 +523,9 @@ class IRCAAgent(abc.ABC):
             payload["threshold"] = threshold
         if filter_type:
             payload["filter_type"] = filter_type
-        if prefer:
-            payload["prefer"] = prefer
+        eff_prefer = prefer or getattr(self, "default_prefer", "tool")
+        if eff_prefer:
+            payload["prefer"] = eff_prefer
 
         headers = {}
         if self.session_token:
@@ -583,8 +586,9 @@ class IRCAAgent(abc.ABC):
         }
         if filter_type:
             payload["filter_type"] = filter_type
-        if prefer:
-            payload["prefer"] = prefer
+        eff_prefer = prefer or getattr(self, "default_prefer", "tool")
+        if eff_prefer:
+            payload["prefer"] = eff_prefer
 
         headers = {}
         if self.session_token:

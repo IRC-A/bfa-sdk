@@ -43,6 +43,8 @@ class IRCAInteractiveAgent(IRCAAgent):
     An extension of IRCAAgent for frontend/coordinator agents that need memory and context management.
     """
     def __init__(self, *args, **kwargs):
+        if "default_prefer" not in kwargs:
+            kwargs["default_prefer"] = "agent"
         super().__init__(*args, **kwargs)
         self.memory_stack = MemoryStack()
 

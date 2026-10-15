@@ -192,3 +192,34 @@ async def test_delegate_task_no_gateway():
     )
     res = await agent.delegate_task("query")
     assert "Gateway URL not configured" in res
+
+
+def test_interactive_vs_specialist_default_prefer():
+    from bfa_sdk.core.agent import BFAAgent
+    
+    class DummySpecialist(BFAAgent):
+        async def run(self, user_message, context):
+            return "ok"
+
+    specialist = DummySpecialist(
+        agent_id="specialist_worker",
+        name="Specialist Worker",
+        description="desc",
+        tags=["worker"],
+        examples=["do work"],
+        url="http://localhost:8002"
+    )
+    # Specialists prioritize tools by default
+    assert specialist.default_prefer == "tool"
+
+    coordinator = MockInteractiveAgent(
+        agent_id="coordinator_bot",
+        name="Coordinator Bot",
+        description="desc",
+        tags=["coordinator"],
+        examples=["help me"],
+        url="http://localhost:8005"
+    )
+    # Interactive coordinators prioritize cognitive agents by default
+    assert coordinator.default_prefer == "agent"
+
