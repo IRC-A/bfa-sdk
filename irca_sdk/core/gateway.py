@@ -532,12 +532,12 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         return registry
 
     @app.get("/resolve")
-    async def resolve(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
+    async def resolve(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), prefer: Optional[str] = Query("agent"), exclude_node_id: Optional[str] = Query(None)):
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
         await prune_dead_endpoints()
         eff_threshold = threshold if threshold is not None else CONFIG.semantic_threshold
-        return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, exclude_node_id=exclude_node_id)
+        return ROUTER.resolve(query, top_k=top_k, threshold=eff_threshold, prefer=prefer, exclude_node_id=exclude_node_id)
 
     @app.get("/resolve/agents")
     async def resolve_agents(query: str, top_k: int = Query(3), threshold: Optional[float] = Query(None), exclude_node_id: Optional[str] = Query(None)):
@@ -1982,11 +1982,12 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         }
 
     @app.post("/discover")
-    async def discover(query: str = None, intent: str = None, candidates: int = 1, threshold: float = None, exclude_node_id: str = None, payload: Dict[str, Any] = None):
+    async def discover(query: str = None, intent: str = None, candidates: int = 1, threshold: float = None, exclude_node_id: str = None, filter_type: str = None, prefer: str = "agent", payload: Dict[str, Any] = None):
         """
         Phase 1 - Capability Inquiry (IRC-A Protocol v1.3.0).
         Stateless lookup: Asks 'who can solve this, and what parameters do they need?'.
         Returns matching capability metadata with its declared input_schema.
+        Prioritizes cognitive agents over tools by default (prefer="agent").
         """
         if payload is None:
             payload = {}
@@ -2018,11 +2019,15 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         effective_exclude_id = exclude_node_id or payload.get("exclude_node_id") or caller_id
         req_threshold = threshold if threshold is not None else (payload.get("threshold") if payload.get("threshold") is not None else CONFIG.semantic_threshold)
         req_candidates = candidates if candidates and candidates > 1 else payload.get("candidates", 1)
+        req_filter_type = filter_type or payload.get("filter_type") or payload.get("type")
+        req_prefer = prefer or payload.get("prefer") or "agent"
 
         result = ROUTER.resolve(
             actual_query, 
             top_k=req_candidates,
             threshold=req_threshold,
+            filter_type=req_filter_type,
+            prefer=req_prefer,
             agent_channels=caller_channels, 
             exclude_node_id=effective_exclude_id
         )
@@ -2201,6 +2206,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             result = ROUTER.resolve(
                 intent,
                 threshold=req_threshold,
+                filter_type=payload.get("filter_type"),
+                prefer=payload.get("prefer", "agent"),
                 agent_channels=caller_channels,
                 exclude_node_id=effective_exclude_id
             )

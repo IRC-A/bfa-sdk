@@ -107,3 +107,42 @@ def test_semantic_router_invalid_index():
     assert result["best"] is None
 
 
+def test_cognitive_first_agent_priority():
+    embedder = DummyEmbedder()
+    router = BFASemanticRouter(embedder)
+    
+    registry_data = {
+        "pms_tool": {
+            "name": "Check Availability Tool",
+            "description": "PMS tool that checks hotel room availability for dates.",
+            "url": "http://127.0.0.1:3001/tools",
+            "tags": ["room", "availability", "hotel"],
+            "examples": ["check room availability", "hotel room availability"],
+            "type": "tool"
+        },
+        "reservas_agent": {
+            "name": "Reservas Specialist Agent",
+            "description": "Cognitive specialist agent managing hotel reservations, policies and availability.",
+            "url": "http://127.0.0.1:8210",
+            "tags": ["reservas", "availability", "booking"],
+            "examples": ["check room availability", "manage bookings"],
+            "type": "agent"
+        }
+    }
+    router.update_registry(registry_data)
+    router.build_index()
+
+    # 1. By default (prefer="agent"), the Agent MUST be selected over the tool when above threshold
+    res_default = router.resolve("check room availability", threshold=0.1)
+    assert res_default["type"] == "semantic_faiss"
+    assert res_default["best"]["type"] == "agent"
+    assert res_default["best"]["skill"] == "reservas_agent"
+
+    # 2. When explicitly requesting prefer="tool", the tool takes priority
+    res_tool = router.resolve("check room availability", threshold=0.1, prefer="tool")
+    assert res_tool["type"] == "semantic_faiss"
+    assert res_tool["best"]["type"] == "tool"
+    assert res_tool["best"]["skill"] == "pms_tool"
+
+
+

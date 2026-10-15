@@ -85,12 +85,14 @@ class BFASemanticRouter:
         top_k: int = 3, 
         threshold: float = 0.3, 
         filter_type: Optional[str] = None,
+        prefer: Optional[str] = "agent",
         agent_channels: Optional[List[str]] = None,
         exclude_node_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Resolves the query to the best matching agent or tool from FAISS index.
         Normalizes L2 distance to a 0.0 - 1.0 confidence score.
+        Supports prefer="agent" (default) to prioritize cognitive agents over tools when above threshold.
         Supports exclude_node_id to bypass self-referential matches.
         """
         if self.index is None or not self.index_keys:
@@ -100,8 +102,8 @@ class BFASemanticRouter:
         query_vector = self.embedder.embed_query(query)
         query_vector_np = np.array([query_vector]).astype("float32")
 
-        # Search index - fetch extra candidates to account for exclusions
-        search_k = min(top_k + 5, len(self.index_keys))
+        # Search index - fetch broader candidate pool so type preferences and exclusions have ample candidates
+        search_k = min(max(top_k * 4, 25), len(self.index_keys))
         if search_k <= 0:
             return {"type": "no_match", "best": None, "candidates": []}
         distances, indices = self.index.search(query_vector_np, search_k)
@@ -155,8 +157,45 @@ class BFASemanticRouter:
                 "data": item
             })
 
-        # Filter and sort candidate results
-        candidates = sorted(candidates, key=lambda x: x["confidence"], reverse=True)
+        # Sort candidates according to cognitive preference (Cognitive-First)
+        norm_prefer = str(prefer).strip().lower() if prefer else None
+
+        if norm_prefer == "agent":
+            # Cognitive-First priority:
+            # 0. Meets threshold & is Agent (Highest priority)
+            # 1. Meets threshold & is Tool (MCP fallback)
+            # 2. Below threshold & is Agent
+            # 3. Below threshold & is Tool
+            def sort_key(c):
+                meets = c["confidence"] >= threshold
+                is_agent = c.get("type") == "agent"
+                if meets and is_agent:
+                    priority = 0
+                elif meets:
+                    priority = 1
+                elif is_agent:
+                    priority = 2
+                else:
+                    priority = 3
+                return (priority, -c["confidence"])
+            candidates = sorted(candidates, key=sort_key)
+        elif norm_prefer == "tool":
+            def sort_key(c):
+                meets = c["confidence"] >= threshold
+                is_tool = c.get("type") == "tool"
+                if meets and is_tool:
+                    priority = 0
+                elif meets:
+                    priority = 1
+                elif is_tool:
+                    priority = 2
+                else:
+                    priority = 3
+                return (priority, -c["confidence"])
+            candidates = sorted(candidates, key=sort_key)
+        else:
+            candidates = sorted(candidates, key=lambda x: x["confidence"], reverse=True)
+
         filtered_candidates = candidates[:top_k]
 
         if not filtered_candidates:
