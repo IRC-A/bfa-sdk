@@ -89,6 +89,8 @@ class IRCAMCP:
             # Clean protocol metadata keys that are not part of the tool's signature
             clean_arguments = dict(arguments) if isinstance(arguments, dict) else {}
             clean_arguments.pop("_det", None)
+            if not self.tool_metadata.get(tool_name, {}).get("has_delegated_token", False):
+                clean_arguments.pop("delegated_token", None)
                 
             try:
                 # Invoke the tool via FastMCP's call_tool
@@ -174,13 +176,15 @@ class IRCAMCP:
             elif hasattr(eff_output_schema, "schema"):
                 eff_output_schema = eff_output_schema.schema()
 
+            has_det = "delegated_token" in sig.parameters
             self.tool_metadata[tool_name] = {
                 "tags": tags or [],
                 "examples": examples or [],
-                "output_schema": eff_output_schema or {}
+                "output_schema": eff_output_schema or {},
+                "has_delegated_token": has_det
             }
             
-            if "delegated_token" in sig.parameters:
+            if has_det:
                 import functools
                 if inspect.iscoroutinefunction(func):
                     @functools.wraps(func)
