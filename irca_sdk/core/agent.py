@@ -713,6 +713,39 @@ class IRCAAgent(abc.ABC):
                     continue
             raise RuntimeError(f"P2P call failed for all endpoints {target_urls}: {last_error}")
 
+    def parse_tool_output(self, raw_output: Any, output_schema: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Agnostic helper to parse, unmarshal and validate tool execution outputs against output_schema.
+        Handles JSON strings, raw strings, dictionaries, lists, or custom serializations.
+        Ensures the agent receives structured, clean data according to the tool's output contract.
+        """
+        parsed = raw_output
+        if isinstance(raw_output, (bytes, bytearray)):
+            try:
+                parsed = raw_output.decode("utf-8")
+            except Exception:
+                pass
+
+        if isinstance(parsed, str):
+            trimmed = parsed.strip()
+            if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
+                try:
+                    parsed = json.loads(trimmed)
+                except Exception:
+                    pass
+
+        # If output_schema specifies required fields, verify presence
+        if output_schema and isinstance(output_schema, dict) and isinstance(parsed, dict):
+            required = output_schema.get("required", [])
+            missing = [req for req in required if req not in parsed]
+            if missing and "_schema_validation" not in parsed:
+                parsed["_schema_validation"] = {
+                    "valid": False,
+                    "missing_fields": missing
+                }
+
+        return parsed
+
     async def request_assistance(
         self,
         intent: Optional[str] = None,

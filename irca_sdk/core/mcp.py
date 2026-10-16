@@ -3,7 +3,7 @@
 import inspect
 import os
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Callable
+from typing import Dict, Any, List, Callable, Optional, Union
 from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -85,10 +85,14 @@ class IRCAMCP:
             
             if not tool_name:
                 return JSONResponse(status_code=400, content="Missing 'tool' field in request body")
+
+            # Clean protocol metadata keys that are not part of the tool's signature
+            clean_arguments = dict(arguments) if isinstance(arguments, dict) else {}
+            clean_arguments.pop("_det", None)
                 
             try:
                 # Invoke the tool via FastMCP's call_tool
-                result_objects = await self.mcp.call_tool(tool_name, arguments)
+                result_objects = await self.mcp.call_tool(tool_name, clean_arguments)
                 # Format text content list to string
                 result_text = ""
                 if hasattr(result_objects, "content") and result_objects.content:
@@ -140,20 +144,41 @@ class IRCAMCP:
         """
         return self._asgi_app
 
-    def tool(self, name: str = None, description: str = None, tags: List[str] = None, examples: List[str] = None):
+    def tool(
+        self,
+        name: str = None,
+        description: str = None,
+        tags: List[str] = None,
+        examples: List[str] = None,
+        output_schema: Optional[Any] = None
+    ):
         """
         Decorator to register a tool on the MCP instance.
-        Stores tags and examples metadata for vector search indexing.
+        Stores tags, examples, and output_schema metadata for vector search indexing and client validation.
         Automatically injects offline DET validation if 'delegated_token' is expected in arguments.
         """
         def decorator(func: Callable):
             tool_name = name or func.__name__
+            sig = inspect.signature(func)
+            
+            eff_output_schema = output_schema
+            if eff_output_schema is None:
+                ret_ann = sig.return_annotation
+                if ret_ann is not inspect.Signature.empty and ret_ann is not None:
+                    if hasattr(ret_ann, "model_json_schema"):
+                        eff_output_schema = ret_ann.model_json_schema()
+                    elif hasattr(ret_ann, "schema"):
+                        eff_output_schema = ret_ann.schema()
+            elif hasattr(eff_output_schema, "model_json_schema"):
+                eff_output_schema = eff_output_schema.model_json_schema()
+            elif hasattr(eff_output_schema, "schema"):
+                eff_output_schema = eff_output_schema.schema()
+
             self.tool_metadata[tool_name] = {
                 "tags": tags or [],
-                "examples": examples or []
+                "examples": examples or [],
+                "output_schema": eff_output_schema or {}
             }
-            
-            sig = inspect.signature(func)
             
             if "delegated_token" in sig.parameters:
                 import functools
@@ -272,12 +297,15 @@ class IRCAMCP:
                 elif hasattr(tool, "input_model") and tool.input_model:
                     input_schema = tool.input_model.model_json_schema()
                 
-                meta = self.tool_metadata.get(tool.name, {"tags": [], "examples": []})
+                meta = self.tool_metadata.get(tool.name, {"tags": [], "examples": [], "output_schema": {}})
+                out_schema = meta.get("output_schema", {})
                 
                 tools_list.append({
                     "name": tool.name,
                     "description": tool.description or "",
                     "inputSchema": input_schema,
+                    "outputSchema": out_schema,
+                    "output_schema": out_schema,
                     "annotations": {
                         "tags": meta.get("tags", []),
                         "examples": meta.get("examples", [])

@@ -285,6 +285,7 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
                             "name": tool_name,
                             "description": tool.get("description", ""),
                             "input_schema": tool.get("inputSchema", {}),
+                            "output_schema": tool.get("outputSchema") or tool.get("output_schema") or {},
                             "tags": tags,
                             "examples": examples,
                         }
@@ -2066,6 +2067,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         target_url = best["data"].get("url") or best["data"].get("server_url")
         tool_name = best["data"].get("name", target_node_id)
         input_schema = best["data"].get("input_schema", {})
+        output_schema = best["data"].get("output_schema", {})
         description = best["data"].get("description", "")
         
         # Build clean Phase 1 match object
@@ -2075,7 +2077,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "endpoint": target_url,
             "type": target_type,
             "description": description,
-            "input_schema": input_schema
+            "input_schema": input_schema,
+            "output_schema": output_schema
         }
 
         # Candidate list if multiple requested
@@ -2089,7 +2092,8 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                 "type": cand.get("type"),
                 "score": cand.get("score"),
                 "description": c_data.get("description", ""),
-                "input_schema": c_data.get("input_schema", {})
+                "input_schema": c_data.get("input_schema", {}),
+                "output_schema": c_data.get("output_schema", {})
             })
 
         # Extract restricted parameters dynamically if present for legacy callers
@@ -2165,6 +2169,7 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
             "target_node_id": target_node_id,
             "type": target_type,
             "input_schema": input_schema,
+            "output_schema": output_schema,
             "restricted_params": restricted_params,
             "prepared_call": prepared_call
         }

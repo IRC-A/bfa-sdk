@@ -10,7 +10,11 @@ from bfa_sdk.core.agent import BFAAgent, BFAAgentExecutor
 def test_mcp_wrapper():
     mcp_server = BFAMCP("MDBank MCP", version="1.2.3")
     
-    @mcp_server.tool(tags=["test_tag"], examples=["example 1"])
+    @mcp_server.tool(
+        tags=["test_tag"],
+        examples=["example 1"],
+        output_schema={"type": "object", "properties": {"result": {"type": "string"}}}
+    )
     def dummy_tool(param: str) -> str:
         """This is a dummy tool for testing."""
         return f"Result: {param}"
@@ -37,6 +41,13 @@ def test_mcp_wrapper():
     assert "test_tag" in tool["annotations"]["tags"]
     assert "example 1" in tool["annotations"]["examples"]
     assert isinstance(tool["inputSchema"], dict)
+    assert tool["outputSchema"] == {"type": "object", "properties": {"result": {"type": "string"}}}
+    assert tool["output_schema"] == {"type": "object", "properties": {"result": {"type": "string"}}}
+
+    # Direct P2P execution with legacy _det stripped cleanly
+    exec_res = client.post("/tools", json={"tool": "dummy_tool", "arguments": {"param": "abc", "_det": "v4.token"}})
+    assert exec_res.status_code == 200
+    assert "Result: abc" in exec_res.text
 # 2. Test BFAMCP register and list tools exceptions
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")
@@ -184,5 +195,38 @@ async def test_agent_register_with_gateway(mock_post):
     mock_post.side_effect = Exception("network connection failed")
     success = await agent.register_with_gateway("http://localhost:8000")
     assert success is False
+
+
+def test_bfa_agent_parse_tool_output():
+    class DummyAgent(BFAAgent):
+        async def run(self, msg, ctx):
+            return "ok"
+
+    agent = DummyAgent("test_parse", "Test", "desc", ["t"], ["e"], "http://127.0.0.1:8200")
+    
+    # 1. Parse JSON string
+    res = agent.parse_tool_output('{"status": "success", "count": 42}')
+    assert isinstance(res, dict)
+    assert res["count"] == 42
+    
+    # 2. Parse dictionary with schema validation
+    schema = {
+        "type": "object",
+        "required": ["status", "count", "missing_field"],
+        "properties": {"status": {"type": "string"}}
+    }
+    res_validated = agent.parse_tool_output(res, output_schema=schema)
+    assert res_validated["_schema_validation"]["valid"] is False
+    assert "missing_field" in res_validated["_schema_validation"]["missing_fields"]
+
+    # 3. Valid schema
+    valid_schema = {
+        "type": "object",
+        "required": ["status", "count"]
+    }
+    res_ok = agent.parse_tool_output('{"status": "ok", "count": 10}', output_schema=valid_schema)
+    assert res_ok["count"] == 10
+    assert "_schema_validation" not in res_ok
+
 
 
