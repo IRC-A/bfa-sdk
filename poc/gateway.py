@@ -50,7 +50,10 @@ class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
         # Suppress polling HTTP GET endpoints from console output
-        polling_paths = ["GET /skills", "GET /gateway-logs", "GET /token-metrics", "GET /logs"]
+        polling_paths = [
+            "GET /skills", "GET /gateway-logs", "GET /token-metrics", "GET /logs",
+            "GET /health", "GET /ping", "GET /tools", "GET /.well-known/agent-card.json"
+        ]
         return not any(path in msg for path in polling_paths)
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())

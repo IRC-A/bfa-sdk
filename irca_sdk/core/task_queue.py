@@ -111,38 +111,62 @@ def extract_parameters_from_text(text: str) -> Dict[str, Any]:
         if "check_out" not in params:
             params["check_out"] = range_match.group(2)
 
-    # 2. Number of guests / personas
-    guests_match = re.search(r"\b(\d+)\s*(?:guests?|personas?|hu[eé]spedes?|pax|adultos?|adults?)", text, re.IGNORECASE)
-    if guests_match:
-        params["guests"] = int(guests_match.group(1))
+    # 2. Number of guests / personas / adults / children
+    adults_count = 0
+    children_count = 0
+    adults_match = re.search(r"\b(\d+)\s*(?:adultos?|adults?)\b", text, re.IGNORECASE)
+    if adults_match:
+        adults_count = int(adults_match.group(1))
+
+    children_match = re.search(r"\b(\d+)\s*(?:children|child|niños?|kids?|menores?|infants?|beb[eé]s?)\b", text, re.IGNORECASE)
+    if children_match:
+        children_count = int(children_match.group(1))
+
+    if adults_count or children_count:
+        params["adults"] = adults_count
+        params["children"] = children_count
+        params["guests"] = adults_count + children_count
     else:
-        for_guests = re.search(r"\bfor\s*(\d+)\s*(?:guests?|persons?|people)?", text, re.IGNORECASE)
-        if for_guests and int(for_guests.group(1)) < 50:
-            params["guests"] = int(for_guests.group(1))
+        guests_match = re.search(r"\b(\d+)\s*(?:guests?|personas?|hu[eé]spedes?|pax)\b", text, re.IGNORECASE)
+        if guests_match:
+            params["guests"] = int(guests_match.group(1))
+        else:
+            for_guests = re.search(r"\bfor\s*(\d+)\s*(?:guests?|persons?|people)?\b", text, re.IGNORECASE)
+            if for_guests and int(for_guests.group(1)) < 50:
+                params["guests"] = int(for_guests.group(1))
 
     # 3. Property ID / Hotel ID / Tenant ID
     prop_match = re.search(
-        r"\b(?:(?:hotel\s+)?property[_-]?id|hotel[_-]?id|tenant[_-]?id|hotel|property)\s*[:=]?\s*([0-9a-zA-Z_-]+)",
+        r"\b(?:(?:hotel\s+)?property[_-]?id|hotel[_-]?id|tenant[_-]?id)\s*[:=]?\s*([0-9a-zA-Z_-]+)",
         text,
         re.IGNORECASE
     )
+    if not prop_match:
+        prop_match = re.search(r"\b(?:hotel|property)\s*[:=#]\s*([0-9a-zA-Z_-]+)", text, re.IGNORECASE)
     if prop_match:
         val = prop_match.group(1).strip()
         if val.lower() in ("propertyid", "property_id", "id"):
             sub_m = re.search(r"\bproperty[_-]?id\s*[:=]?\s*([0-9a-zA-Z_-]+)", text, re.IGNORECASE)
             if sub_m:
                 val = sub_m.group(1).strip()
-        params["property_id"] = val
+        if val.lower() not in ("id", "en", "de", "del", "para", "la", "el", "posada"):
+            params["property_id"] = val
 
     # 4. Account ID / Customer ID
-    acc_match = re.search(r"\b(?:account[_-]?id|customer[_-]?id|cuenta|cuenta[_-]?id)\s*[:=]?\s*(\w+)", text, re.IGNORECASE)
+    acc_match = re.search(r"\b(?:account[_-]?id|customer[_-]?id|cuenta[_-]?id)\s*[:=]?\s*(\w+)", text, re.IGNORECASE)
+    if not acc_match:
+        acc_match = re.search(r"\bcuenta\s*[:=#]\s*(\w+)", text, re.IGNORECASE)
     if acc_match:
         params["account_id"] = acc_match.group(1)
 
     # 5. Room ID
-    room_match = re.search(r"\b(?:room[_-]?id|habitaci[oó]n|cuarto)\s*[:=]?\s*(\w+)", text, re.IGNORECASE)
+    room_match = re.search(r"\b(?:room[_-]?id)\s*[:=]?\s*([0-9a-zA-Z_-]+)", text, re.IGNORECASE)
+    if not room_match:
+        room_match = re.search(r"\b(?:habitaci[oó]n|cuarto|room)\s*[:=#]\s*([0-9a-zA-Z_-]+)", text, re.IGNORECASE)
     if room_match:
-        params["room_id"] = room_match.group(1)
+        r_val = room_match.group(1).strip()
+        if r_val.lower() not in ("id", "del", "de", "para", "en", "con", "por", "la", "el"):
+            params["room_id"] = r_val
 
     return params
 
@@ -160,8 +184,28 @@ def clean_intent_text(text: str) -> str:
     cleaned = re.sub(r"\b(?:del|de|from)\s*\d{4}-\d{2}-\d{2}\s*(?:al|a|hasta|to)\s*\d{4}-\d{2}-\d{2}", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "", cleaned)
 
-    # Remove guests/pax clauses
-    cleaned = re.sub(r"\b(?:for\s+)?\d+\s*(?:guests?|personas?|hu[eé]spedes?|pax|adultos?|adults?)\b", "", cleaned, flags=re.IGNORECASE)
+    # Remove compound guests/pax/adults/children clauses (e.g. "for 2 adults and 1 child", "para 2 personas y 1 niño")
+    cleaned = re.sub(
+        r"\b(?:for|para)?\s*\d+\s*(?:guests?|personas?|hu[eé]spedes?|pax|adultos?|adults?)"
+        r"(?:\s*(?:and|y|\+|,)\s*\d+\s*(?:children|child|niños?|kids?|menores?|infants?|beb[eé]s?))?\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    # Remove standalone children/kids clauses
+    cleaned = re.sub(
+        r"\b(?:(?:and|y|\+)\s+)?\d+\s*(?:children|child|niños?|kids?|menores?|infants?|beb[eé]s?)\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    # Remove standalone guests
+    cleaned = re.sub(
+        r"\b(?:for|para)?\s*\d+\s*(?:guests?|personas?|hu[eé]spedes?|pax)\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
 
     # Remove property/hotel/account ID clauses
     cleaned = re.sub(r"\b(?:for\s+)?(?:hotel\s+)?(?:property[_-]?id|hotel[_-]?id|tenant[_-]?id)\s*[:=]?\s*\w+", "", cleaned, flags=re.IGNORECASE)
@@ -177,7 +221,7 @@ def decompose_prompt_to_tasks(prompt: str, common_params: Optional[Dict[str, Any
     """
     Decomposes a composite prompt into a sequential list of atomic SubTasks.
     Extracts domain parameters once, strips them from the intent string,
-    and splits composite conjunctions ('and', 'y', ';').
+    and splits composite conjunctions ('and', 'y', ';') only when followed by action verbs or distinct capabilities.
     """
     extracted_params = extract_parameters_from_text(prompt)
     if common_params:
@@ -187,22 +231,33 @@ def decompose_prompt_to_tasks(prompt: str, common_params: Optional[Dict[str, Any
     if not clean_intent:
         clean_intent = prompt.strip()
 
-    # Split composite intents on action conjunctions
+    # Split composite intents only on explicit action conjunctions
     # e.g. "check room availability and rates" -> ["check room availability", "check room rates"]
     # "consultar disponibilidad y ver tarifas" -> ["consultar disponibilidad", "ver tarifas"]
     split_patterns = [
-        r"\s+and\s+(?:check\s+|ver\s+|obtener\s+|get\s+)?",
-        r"\s+y\s+(?:ver\s+|consultar\s+|obtener\s+|check\s+)?",
-        r"\s+además\s+de\s+",
-        r"\s*;\s*"
+        r"\s+(?:and|y)\s+(?:check\s+|ver\s+|obtener\s+|get\s+|consultar\s+|buscar\s+|reservar\s+|book\s+|listar\s+|create\s+|crear\s+)",
+        r"\s+(?:and|y)\s+(?:rates|rate|tarifas|precios|precio)\b",
+        r"\s+(?:and|y)\s+(?:availability|disponibilidad)\b",
+        r"\s+(?:además\s+de|ademas\s+de|also)\s+",
+        r"\s*;\s*",
     ]
 
     segments = [clean_intent]
     for pattern in split_patterns:
         new_segments = []
         for seg in segments:
-            parts = [p.strip() for p in re.split(pattern, seg, flags=re.IGNORECASE) if p.strip()]
-            new_segments.extend(parts)
+            m = re.search(pattern, seg, flags=re.IGNORECASE)
+            if m:
+                start, end = m.span()
+                p1 = seg[:start].strip()
+                matched_str = seg[start:end].strip()
+                sub_tail = seg[end:].strip()
+                verb_or_noun = re.sub(r"^(?:and|y|además\s+de|ademas\s+de|also)\s+", "", matched_str, flags=re.IGNORECASE).strip()
+                p2 = f"{verb_or_noun} {sub_tail}".strip()
+                parts = [p for p in (p1, p2) if p]
+                new_segments.extend(parts)
+            else:
+                new_segments.append(seg)
         segments = new_segments
 
     # Refine segments: if a segment is just "rates", enrich it with the subject "check room rates"

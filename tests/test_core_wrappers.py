@@ -185,15 +185,22 @@ async def test_agent_register_with_gateway(mock_post):
     
     success = await agent.register_with_gateway("http://localhost:8000")
     assert success is True
-    
-    # Failure Case 1: Status Code 500
-    mock_res.status_code = 500
+
+    # Fast-path Case: valid session returns True immediately without making a network call
+    mock_post.reset_mock()
     success = await agent.register_with_gateway("http://localhost:8000")
+    assert success is True
+    mock_post.assert_not_called()
+    
+    # Failure Case 1: Status Code 500 (with force=True to bypass fast-path)
+    mock_res.status_code = 500
+    mock_post.return_value = mock_res
+    success = await agent.register_with_gateway("http://localhost:8000", force=True)
     assert success is False
     
-    # Failure Case 2: Exception raised
+    # Failure Case 2: Exception raised (with force=True to bypass fast-path)
     mock_post.side_effect = Exception("network connection failed")
-    success = await agent.register_with_gateway("http://localhost:8000")
+    success = await agent.register_with_gateway("http://localhost:8000", force=True)
     assert success is False
 
 

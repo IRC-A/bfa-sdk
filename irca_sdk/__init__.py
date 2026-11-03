@@ -37,12 +37,31 @@ else:
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from irca_sdk.core.agent import IRCAAgent, BFAAgent
-from irca_sdk.core.interactive_agent import IRCAInteractiveAgent, BFAInteractiveAgent
-from irca_sdk.core.mcp import IRCAMCP, BFAMCP
+try:
+    from irca_sdk.core.agent import IRCAAgent, BFAAgent
+    from irca_sdk.core.interactive_agent import IRCAInteractiveAgent, BFAInteractiveAgent
+except ImportError:
+    IRCAAgent = None  # type: ignore
+    BFAAgent = None  # type: ignore
+    IRCAInteractiveAgent = None  # type: ignore
+    BFAInteractiveAgent = None  # type: ignore
+
+try:
+    from irca_sdk.core.mcp import IRCAMCP, BFAMCP
+except ImportError:
+    IRCAMCP = None  # type: ignore
+    BFAMCP = None  # type: ignore
+
 from irca_sdk.core.gateway import create_gateway_app
 from irca_sdk.router.search import BFASemanticRouter
-from irca_sdk.core.task_queue import TaskQueue, SubTask, decompose_prompt_to_tasks, extract_parameters_from_text
+
+try:
+    from irca_sdk.core.task_queue import TaskQueue, SubTask, decompose_prompt_to_tasks, extract_parameters_from_text
+except ImportError:
+    TaskQueue = None  # type: ignore
+    SubTask = None  # type: ignore
+    decompose_prompt_to_tasks = None  # type: ignore
+    extract_parameters_from_text = None  # type: ignore
 
 __all__ = [
     "IRCAAgent", 

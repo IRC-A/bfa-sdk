@@ -60,7 +60,7 @@ class IRCAMCP:
         if not self.gateway_public_key and self.gateway_url:
             try:
                 import httpx
-                res = httpx.get(f"{self.gateway_url.rstrip('/')}/public_key", timeout=5)
+                res = httpx.get(f"{self.gateway_url.rstrip('/')}/public_key", timeout=1.0)
                 if res.status_code == 200:
                     pem_str = res.json().get("public_key")
                     self.gateway_public_key = serialization.load_pem_public_key(pem_str.encode("utf-8"))
@@ -238,7 +238,7 @@ class IRCAMCP:
             if self.gateway_url:
                 try:
                     import httpx
-                    res = httpx.get(f"{self.gateway_url.rstrip('/')}/public_key", timeout=3)
+                    res = httpx.get(f"{self.gateway_url.rstrip('/')}/public_key", timeout=1.0)
                     if res.status_code == 200:
                         pem_str = res.json().get("public_key")
                         self.gateway_public_key = serialization.load_pem_public_key(pem_str.encode("utf-8"))

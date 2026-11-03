@@ -296,13 +296,14 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
 
 async def prune_dead_endpoints():
     """
-    Actively pings all registered endpoints. If an agent or MCP server is unreachable on TWO consecutive checks,
+    Actively pings all registered endpoints. If an agent or MCP server is unreachable on FIVE consecutive checks,
     automatically unregister it, purge it from FAISS, and persist the update.
     """
     if not hasattr(prune_dead_endpoints, '_fail_counts'):
         prune_dead_endpoints._fail_counts = {}
     
-    if not ROUTER or not getattr(CONFIG, "enable_active_pruning", True):
+    active_pruning = os.getenv("BFA_ENABLE_ACTIVE_PRUNING", "false").lower() in ("true", "1")
+    if not ROUTER or not getattr(CONFIG, "enable_active_pruning", True) or not active_pruning:
         return
         
     urls_to_check = set()
@@ -319,7 +320,7 @@ async def prune_dead_endpoints():
         return
         
     dead_urls = set()
-    async with httpx.AsyncClient(timeout=3.0) as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         for url in urls_to_check:
             try:
                 if os.path.exists("/.dockerenv"):
@@ -350,9 +351,9 @@ async def prune_dead_endpoints():
             except Exception:
                 prune_dead_endpoints._fail_counts[url] = prune_dead_endpoints._fail_counts.get(url, 0) + 1
     
-    # Remove after 2 consecutive failures
+    # Remove after 5 consecutive failures
     for url, count in list(prune_dead_endpoints._fail_counts.items()):
-        if count >= 2:
+        if count >= 5:
             dead_urls.add(url)
                 
     if dead_urls:
@@ -385,18 +386,18 @@ async def prune_dead_endpoints():
 
 
 async def health_monitor_loop():
-    """Background task to continuously monitor registered nodes and prune dead ones."""
+    """Background task to monitor registered nodes without aggressive polling."""
     while True:
         try:
-            await prune_dead_endpoints()
-            await asyncio.sleep(10)
+            active_pruning = os.getenv("BFA_ENABLE_ACTIVE_PRUNING", "false").lower() in ("true", "1")
+            if active_pruning:
+                await prune_dead_endpoints()
+            await asyncio.sleep(45)
         except asyncio.CancelledError:
             break
         except Exception as e:
             print(f"Health monitor loop error: {e}")
-            await asyncio.sleep(10)
-        except Exception as e:
-            print(f"BFA Health Monitor Error: {e}")
+            await asyncio.sleep(45)
 
 
 @asynccontextmanager

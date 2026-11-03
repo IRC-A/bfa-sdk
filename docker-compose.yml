@@ -14,9 +14,13 @@ services:
       - BFA_USE_MOCK_EMBEDDINGS=false
       - BFA_USE_OPENAI_EMBEDDINGS=true
       - BFA_REGISTRY_DB_PATH=/app/data/bfa_registry_db.json
+      - BFA_ENABLE_ACTIVE_PRUNING=false
     volumes:
       # Mounts data directory to persist registered agents and tools across restarts without single-file mount issues
       - ./data:/app/data
+      - ./irca_sdk:/app/irca_sdk
+      - ./bfa_sdk:/app/bfa_sdk
+      - ./poc:/app/poc
     networks:
       - irca
 
