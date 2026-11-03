@@ -365,29 +365,75 @@ class IRCAAgent(abc.ABC):
         return pem.decode("utf-8")
 
     def _auto_register_to_gateway(self) -> bool:
-        """Spawns register_with_gateway as a non-blocking background task."""
+        """Spawns register_with_gateway as a non-blocking background task if an event loop is running."""
         if not self.gateway_url:
             return False
+        async def _delayed_reg():
+            await asyncio.sleep(1.0)
+            await self.register_with_gateway(self.gateway_url)
+
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.register_with_gateway(self.gateway_url))
+            loop.create_task(_delayed_reg())
             return True
         except RuntimeError:
-            import threading
-            threading.Thread(
-                target=lambda: asyncio.run(self.register_with_gateway(self.gateway_url)),
-                daemon=True
-            ).start()
-            return True
+            # Do not spawn unmanaged daemon threads at module import time;
+            # server lifespans manage registration explicitly in their event loops.
+            return False
 
-    async def register_with_gateway(self, gateway_url: str) -> bool:
+    async def register_with_gateway(self, gateway_url: str, force: bool = False) -> bool:
         """
         Dynamically register this agent with BFA Gateway using cryptographic challenge-response,
         falling back to simple registration if unsupported.
+        Thread-safe and guarded against concurrent duplicate handshakes across any event loop.
         """
-        # Delay slightly to allow the local Uvicorn/Starlette port to bind and listen
-        await asyncio.sleep(1.0)
-        
+        import time
+        now = time.time()
+        # Fast-path sin lock si ya tenemos un token activo y vigente (> 120s), salvo que se fuerce
+        if not force and self.session_token and getattr(self, "token_expiry", 0) and (self.token_expiry - now) > 120:
+            return True
+
+        import threading
+
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if not hasattr(self, "_reg_thread_lock"):
+            self._reg_thread_lock = threading.Lock()
+
+        with self._reg_thread_lock:
+            if not hasattr(self, "_reg_locks"):
+                self._reg_locks = {}
+            # Limpiar referencias a loops cerrados para liberar memoria
+            self._reg_locks = {lp: lk for lp, lk in self._reg_locks.items() if not lp.is_closed()}
+            if current_loop and current_loop not in self._reg_locks:
+                self._reg_locks[current_loop] = asyncio.Lock()
+            reg_lock = self._reg_locks.get(current_loop)
+
+        if reg_lock:
+            async with reg_lock:
+                return await self._do_register_handshake(gateway_url, force=force)
+        else:
+            return await self._do_register_handshake(gateway_url, force=force)
+
+    async def _do_register_handshake(self, gateway_url: str, force: bool = False) -> bool:
+        import time
+        now = time.time()
+        # Si otro coroutine del mismo loop ya renovó el token mientras esperábamos el lock
+        if not force and self.session_token and str(self.session_token).startswith("v4.public.") and getattr(self, "token_expiry", 0) and (self.token_expiry - now) > 120:
+            return True
+
+        if getattr(self, "_reg_handshake_in_flight", False):
+            for _ in range(25):
+                await asyncio.sleep(0.2)
+                if not getattr(self, "_reg_handshake_in_flight", False):
+                    break
+            if not force and self.session_token and str(self.session_token).startswith("v4.public.") and getattr(self, "token_expiry", 0) and (self.token_expiry - time.time()) > 120:
+                return True
+
+        self._reg_handshake_in_flight = True
         self.gateway_url = gateway_url
         init_url = f"{gateway_url.rstrip('/')}/register/init"
         verify_url = f"{gateway_url.rstrip('/')}/register/verify"
@@ -459,9 +505,10 @@ class IRCAAgent(abc.ABC):
                     print(f"BFAAgent: Successfully registered '{self.agent_id}' via cryptographic handshake.")
                     return True
                 else:
-                    raise NotImplementedError()
-        except (NotImplementedError, KeyError, Exception):
-            # Fall back to simple, unauthenticated registration for compatibility
+                    raise NotImplementedError(f"Verify failed with status {res_verify.status_code}: {res_verify.text}")
+        except Exception as exc:
+            # Fall back to simple, unauthenticated registration for compatibility only if no valid PASETO session token
+            print(f"BFAAgent Handshake Notice: Cryptographic handshake did not complete ({exc}), evaluating fallback...")
             try:
                 async with httpx.AsyncClient() as client:
                     register_params = {"url": self.url, "channels": ",".join(self.channels), "node_id": self.agent_id}
@@ -473,6 +520,10 @@ class IRCAAgent(abc.ABC):
                         timeout=5
                     )
                     if res_simple.status_code == 200:
+                        # NEVER overwrite an existing valid PASETO token with an unverified legacy string
+                        if not (self.session_token and str(self.session_token).startswith("v4.public.")):
+                            self.session_token = f"legacy-session-{self.agent_id}"
+                            self.token_expiry = int(time.time()) + 3600
                         print(f"IRCAAgent: Successfully registered '{self.agent_id}' via simple registration fallback.")
                         return True
                     else:
@@ -481,6 +532,8 @@ class IRCAAgent(abc.ABC):
             except Exception as ex:
                 print(f"IRCAAgent Error: Failed to connect to Gateway fallback at {fallback_url}: {ex}")
                 return False
+        finally:
+            self._reg_handshake_in_flight = False
 
     async def discover_capability(
         self,
