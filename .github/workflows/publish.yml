@@ -51,6 +51,7 @@ jobs:
           generate_release_notes: true
 
       - name: Publish to PyPI
+        if: github.event_name != 'pull_request'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true

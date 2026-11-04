@@ -28,7 +28,7 @@ The project is dual-licensed: **AGPLv3** for the Community Edition and a **Comme
 | Crypto | `cryptography` (Ed25519), custom PASETO v4.public implementation in `bfa_sdk/core/paseto.py` |
 | Optional serverless | `mangum` (AWS Lambda ASGI adapter) |
 | Config / env | `python-dotenv`, `pyyaml` |
-| Package | `setuptools` via `pyproject.toml`; package name `bfa-irc-a-sdk` |
+| Package | `setuptools` via `pyproject.toml`; package name `irca-sdk` |
 | Frontend | React 18 + Tailwind + `react-router-dom` + `@ag-ui/client` (`examples/frontend/`) |
 | n8n integration | TypeScript package `n8n-nodes-bfa` with enterprise license check |
 | Infrastructure (example) | Terraform for Google Cloud Run (`terraform/`) |
@@ -192,7 +192,7 @@ The project follows these conventions, which are also summarised in `CONTRIBUTIN
 - **Language:** Source code comments and docstrings are in English. User-facing READMEs are translated to Spanish and Portuguese.
 - **Core must stay generic:** Do not put business logic (banking, hotel, etc.) into `bfa_sdk/`. Business-specific code belongs in `examples/` or in downstream projects.
 - **Use the abstractions:** New agents must inherit from `BFAAgent` (or `BFAInteractiveAgent` for coordinators). New tool servers must use `BFAMCP`. This ensures automatic A2A/FastMCP compatibility, metadata extraction, and security middleware.
-- **Serverless-friendly:** Keep the dependency footprint light. Heavy dependencies such as `sentence-transformers`/`torch` are optional (`pip install 'bfa-irc-a-sdk[local]'`).
+- **Serverless-friendly:** Keep the dependency footprint light. Heavy dependencies such as `sentence-transformers`/`torch` are optional (`pip install 'irca-sdk[local]'`).
 - **Tests:** Add tests for new code, especially security-critical branches and edge cases. The existing tests use `pytest`, `unittest.mock`, and FastAPI/Starlette `TestClient`.
 
 ---
