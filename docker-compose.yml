@@ -24,9 +24,13 @@ services:
       - ./bfa_sdk:/app/bfa_sdk
       - ./poc:/app/poc
     networks:
+      - hos_network
       - irca
 
 networks:
+  hos_network:
+    name: hos_network
+    external: true
   irca:
     name: irca
     driver: bridge
