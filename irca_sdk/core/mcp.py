@@ -2,6 +2,7 @@
 # Licensed under AGPLv3 / Commercial Dual License.
 import inspect
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Callable, Optional, Union
 from fastmcp import FastMCP
@@ -386,6 +387,7 @@ class IRCAMCP:
                         params={"url": mcp_url, "channels": ",".join(self.channels), "node_id": self.node_id},
                         timeout=5
                     )
+                    self._start_heartbeat_task()
                     print(f"BFAMCP: Successfully registered '{self.node_id}' via cryptographic handshake.")
                     return True
                 else:
@@ -400,6 +402,7 @@ class IRCAMCP:
                         timeout=5
                     )
                     if res_simple.status_code == 200:
+                        self._start_heartbeat_task()
                         print(f"BFAMCP: Successfully registered '{self.node_id}' via simple registration fallback.")
                         return True
                     else:
@@ -408,6 +411,35 @@ class IRCAMCP:
             except Exception as ex:
                 print(f"BFAMCP Error: Failed to connect to Gateway fallback at {fallback_url}: {ex}")
                 return False
+
+    def _start_heartbeat_task(self):
+        """Starts background heartbeat loop if event loop is running."""
+        try:
+            loop = asyncio.get_running_loop()
+            current_task = getattr(self, "_heartbeat_task", None)
+            if current_task is None or current_task.done():
+                self._stop_heartbeat = False
+                self._heartbeat_task = loop.create_task(self._heartbeat_loop())
+        except RuntimeError:
+            pass
+
+    async def _heartbeat_loop(self):
+        """Periodically pushes lightweight heartbeat to Gateway every 30-45s with jitter."""
+        import random
+        while not getattr(self, "_stop_heartbeat", False):
+            try:
+                sleep_sec = 35.0 + random.uniform(-5.0, 5.0)
+                await asyncio.sleep(sleep_sec)
+                if getattr(self, "gateway_url", None) and getattr(self, "session_token", None):
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        await client.post(
+                            f"{self.gateway_url.rstrip('/')}/heartbeat",
+                            json={"node_id": self.node_id, "session_token": self.session_token}
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
 
 
 # Backward compatibility alias

@@ -527,3 +527,57 @@ def test_gateway_register_mcp_collisions(mock_discover_agents, mock_discover_too
         gateway_mod.ROUTER.index = None
         gateway_mod.ROUTER.index_keys = []
 
+
+@patch("bfa_sdk.core.gateway.discover_tools")
+@patch("bfa_sdk.core.gateway.discover_agents")
+def test_heartbeat_and_registration_caching(mock_discover_agents, mock_discover_tools, mock_gateway_setup):
+    def mock_discover_agents_side_effect(urls):
+        if "http://localhost:8080" in urls:
+            return {
+                "test_cached_agent": {
+                    "name": "Cached Agent",
+                    "description": "Agent for caching test",
+                    "url": "http://localhost:8080",
+                    "tags": ["cache"],
+                    "examples": ["test cache"],
+                    "type": "agent"
+                }
+            }
+        return {}
+
+    mock_discover_agents.side_effect = mock_discover_agents_side_effect
+    mock_discover_tools.return_value = {}
+
+    config = BFAConfig()
+    app = create_gateway_app(config)
+
+    with TestClient(app) as client:
+        # 1. First registration builds index
+        res1 = client.post("/register/agent", params={"url": "http://localhost:8080", "node_id": "cached_node"})
+        assert res1.status_code == 200
+        assert "Successfully registered Agent" in res1.json()["message"]
+
+        # Track build_index calls
+        import irca_sdk.core.gateway as gw
+        original_build = gw.ROUTER.build_index
+        build_called = False
+        def tracked_build():
+            nonlocal build_called
+            build_called = True
+            original_build()
+        gw.ROUTER.build_index = tracked_build
+
+        # 2. Re-register identical agent -> FAST PATH, should skip build_index
+        res2 = client.post("/register/agent", params={"url": "http://localhost:8080", "node_id": "cached_node"})
+        assert res2.status_code == 200
+        assert "(cached)" in res2.json()["message"]
+        assert build_called is False, "ROUTER.build_index() should NOT be called for identical metadata!"
+
+        # 3. Test Heartbeat endpoint
+        res_hb = client.post("/heartbeat", json={"node_id": "cached_node"})
+        assert res_hb.status_code == 200
+        assert res_hb.json()["status"] == "ok"
+        assert res_hb.json()["node_id"] == "cached_node"
+        assert gw.REGISTERED_NODES["cached_node"]["status"] == "healthy"
+
+

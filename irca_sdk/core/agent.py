@@ -332,6 +332,9 @@ class IRCAAgent(abc.ABC):
 
         # Register shutdown hook to disconnect from Gateway cleanly
         async def shutdown_event():
+            self._stop_heartbeat = True
+            if getattr(self, "_heartbeat_task", None):
+                self._heartbeat_task.cancel()
             if self.gateway_url:
                 try:
                     async with httpx.AsyncClient() as client:
@@ -370,7 +373,13 @@ class IRCAAgent(abc.ABC):
             return False
         async def _delayed_reg():
             await asyncio.sleep(1.0)
-            await self.register_with_gateway(self.gateway_url)
+            for attempt in range(1, 4):
+                ok = await self.register_with_gateway(self.gateway_url)
+                if ok:
+                    break
+                import random
+                backoff = (2 ** attempt) + random.uniform(0.5, 2.0)
+                await asyncio.sleep(backoff)
 
         try:
             loop = asyncio.get_running_loop()
@@ -380,6 +389,38 @@ class IRCAAgent(abc.ABC):
             # Do not spawn unmanaged daemon threads at module import time;
             # server lifespans manage registration explicitly in their event loops.
             return False
+
+    def _start_heartbeat_task(self):
+        """Starts the background heartbeat loop if an event loop is available and not already running."""
+        try:
+            loop = asyncio.get_running_loop()
+            current_task = getattr(self, "_heartbeat_task", None)
+            if current_task is None or current_task.done():
+                self._stop_heartbeat = False
+                self._heartbeat_task = loop.create_task(self._heartbeat_loop())
+        except RuntimeError:
+            pass
+
+    async def _heartbeat_loop(self):
+        """Periodically pushes a lightweight heartbeat to the Gateway every 30-45s with random jitter."""
+        import random
+        while not getattr(self, "_stop_heartbeat", False):
+            try:
+                sleep_sec = 35.0 + random.uniform(-5.0, 5.0)
+                await asyncio.sleep(sleep_sec)
+                if self.gateway_url and self.session_token:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        res = await client.post(
+                            f"{self.gateway_url.rstrip('/')}/heartbeat",
+                            json={"node_id": self.agent_id, "session_token": self.session_token}
+                        )
+                        if res.status_code in (401, 403):
+                            # Session token rejected or expired on Gateway; renew session gracefully
+                            await self.register_with_gateway(self.gateway_url, force=True)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
 
     async def register_with_gateway(self, gateway_url: str, force: bool = False) -> bool:
         """
@@ -391,6 +432,7 @@ class IRCAAgent(abc.ABC):
         now = time.time()
         # Fast-path sin lock si ya tenemos un token activo y vigente (> 120s), salvo que se fuerce
         if not force and self.session_token and getattr(self, "token_expiry", 0) and (self.token_expiry - now) > 120:
+            self._start_heartbeat_task()
             return True
 
         import threading
@@ -423,6 +465,7 @@ class IRCAAgent(abc.ABC):
         now = time.time()
         # Si otro coroutine del mismo loop ya renovó el token mientras esperábamos el lock
         if not force and self.session_token and str(self.session_token).startswith("v4.public.") and getattr(self, "token_expiry", 0) and (self.token_expiry - now) > 120:
+            self._start_heartbeat_task()
             return True
 
         if getattr(self, "_reg_handshake_in_flight", False):
@@ -431,6 +474,7 @@ class IRCAAgent(abc.ABC):
                 if not getattr(self, "_reg_handshake_in_flight", False):
                     break
             if not force and self.session_token and str(self.session_token).startswith("v4.public.") and getattr(self, "token_expiry", 0) and (self.token_expiry - time.time()) > 120:
+                self._start_heartbeat_task()
                 return True
 
         self._reg_handshake_in_flight = True
@@ -502,6 +546,7 @@ class IRCAAgent(abc.ABC):
                         params=register_params,
                         timeout=5
                     )
+                    self._start_heartbeat_task()
                     print(f"BFAAgent: Successfully registered '{self.agent_id}' via cryptographic handshake.")
                     return True
                 else:
@@ -524,6 +569,7 @@ class IRCAAgent(abc.ABC):
                         if not (self.session_token and str(self.session_token).startswith("v4.public.")):
                             self.session_token = f"legacy-session-{self.agent_id}"
                             self.token_expiry = int(time.time()) + 3600
+                        self._start_heartbeat_task()
                         print(f"IRCAAgent: Successfully registered '{self.agent_id}' via simple registration fallback.")
                         return True
                     else:
