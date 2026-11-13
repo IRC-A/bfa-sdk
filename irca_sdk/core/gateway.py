@@ -217,22 +217,33 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
                 )
                 card = await resolver.get_agent_card()
             except Exception as e:
-                alt_url = None
-                if os.path.exists("/.dockerenv") and ("127.0.0.1" in url or "localhost" in url):
-                    alt_url = url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
-                elif not os.path.exists("/.dockerenv") and "host.docker.internal" in url:
-                    alt_url = url.replace("host.docker.internal", "127.0.0.1")
-                if alt_url and alt_url != url:
-                    try:
-                        resolver = A2ACardResolver(
-                            httpx_client=client,
-                            base_url=alt_url,
-                        )
-                        card = await resolver.get_agent_card()
-                    except Exception:
-                        print(f"BFA Discovery: Error connecting to Agent at {url}: {e}")
+                alt_urls = []
+                if os.path.exists("/.dockerenv"):
+                    if "127.0.0.1" in url or "localhost" in url:
+                        alt_urls.append(url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal"))
+                        alt_urls.append(url.replace("127.0.0.1", "172.17.0.1").replace("localhost", "172.17.0.1"))
+                    elif "host.docker.internal" in url:
+                        alt_urls.append(url.replace("host.docker.internal", "172.17.0.1"))
+                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
                 else:
-                    print(f"BFA Discovery: Error connecting to Agent at {url}: {e}")
+                    if "host.docker.internal" in url:
+                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
+
+                last_err = e
+                for alt_url in alt_urls:
+                    if alt_url != url:
+                        try:
+                            resolver = A2ACardResolver(
+                                httpx_client=client,
+                                base_url=alt_url,
+                            )
+                            card = await resolver.get_agent_card()
+                            if card:
+                                break
+                        except Exception as e2:
+                            last_err = e2
+                if not card:
+                    print(f"BFA Discovery: Error connecting to Agent at {url} (tried {alt_urls}): {last_err}")
 
             if card:
                 for skill in card.skills:
@@ -258,18 +269,29 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
             try:
                 response = await client.get(f"{url}/tools")
             except Exception as e:
-                alt_url = None
-                if os.path.exists("/.dockerenv") and ("127.0.0.1" in url or "localhost" in url):
-                    alt_url = url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
-                elif not os.path.exists("/.dockerenv") and "host.docker.internal" in url:
-                    alt_url = url.replace("host.docker.internal", "127.0.0.1")
-                if alt_url and alt_url != url:
-                    try:
-                        response = await client.get(f"{alt_url}/tools")
-                    except Exception:
-                        print(f"BFA Discovery: Error connecting to MCP server at {url}: {e}")
+                alt_urls = []
+                if os.path.exists("/.dockerenv"):
+                    if "127.0.0.1" in url or "localhost" in url:
+                        alt_urls.append(url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal"))
+                        alt_urls.append(url.replace("127.0.0.1", "172.17.0.1").replace("localhost", "172.17.0.1"))
+                    elif "host.docker.internal" in url:
+                        alt_urls.append(url.replace("host.docker.internal", "172.17.0.1"))
+                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
                 else:
-                    print(f"BFA Discovery: Error connecting to MCP server at {url}: {e}")
+                    if "host.docker.internal" in url:
+                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
+
+                last_err = e
+                for alt_url in alt_urls:
+                    if alt_url != url:
+                        try:
+                            response = await client.get(f"{alt_url}/tools")
+                            if response.status_code == 200:
+                                break
+                        except Exception as e2:
+                            last_err = e2
+                if response is None or response.status_code != 200:
+                    print(f"BFA Discovery: Error connecting to MCP server at {url} (tried {alt_urls}): {last_err}")
 
             if response is not None and response.status_code == 200:
                 try:
