@@ -202,7 +202,98 @@ def persist_endpoint(type_: str, url: str):
         BFAStorageManager.save_registry(reg)
 
 
-async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
+def _generate_candidate_urls(url: str, node_id: Optional[str] = None) -> List[str]:
+    """
+    Generates intelligent fallback URLs for containerized environments (e.g. Docker bridge, host.docker.internal,
+    or internal Docker container hostnames based on node_id).
+    """
+    import urllib.parse
+    candidates = []
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return candidates
+
+    host = parsed.hostname or ""
+    port = parsed.port
+    port_str = f":{port}" if port else ""
+    scheme = parsed.scheme or "http"
+    path = parsed.path or ""
+
+    is_local_or_host = host in ("127.0.0.1", "localhost", "host.docker.internal") or host.startswith("172.")
+
+    # 1. Docker bridge / host fallbacks
+    if os.path.exists("/.dockerenv"):
+        if host in ("127.0.0.1", "localhost"):
+            candidates.append(f"{scheme}://host.docker.internal{port_str}{path}")
+            candidates.append(f"{scheme}://172.17.0.1{port_str}{path}")
+        elif host == "host.docker.internal":
+            candidates.append(f"{scheme}://172.17.0.1{port_str}{path}")
+            candidates.append(f"{scheme}://127.0.0.1{port_str}{path}")
+    else:
+        if host == "host.docker.internal":
+            candidates.append(f"{scheme}://127.0.0.1{port_str}{path}")
+
+    # 2. Dynamic container name candidates when in Docker network and node_id is known
+    if is_local_or_host and node_id:
+        clean_id = node_id.strip()
+        names = [
+            clean_id,
+            clean_id.replace("_", "-"),
+            clean_id.replace("-", "_"),
+            f"unithos-{clean_id.replace('_', '-')}",
+            f"unithos-{clean_id.replace('-', '_')}",
+            f"unithos-agent-{clean_id.replace('_', '-')}",
+            f"unithos-agente-{clean_id.replace('_', '-')}",
+        ]
+        if clean_id.startswith("agente-") or clean_id.startswith("agente_"):
+            suffix = clean_id[7:]
+            names.extend([
+                f"unithos-agent-{suffix}",
+                f"unithos-agente-{suffix}",
+                f"unithos-agent-{suffix.replace('_', '-')}",
+                f"agente_{suffix}",
+                f"agente-{suffix}",
+            ])
+        if clean_id.endswith("_agent") or clean_id.endswith("-agent"):
+            prefix = clean_id[:-6]
+            names.extend([
+                f"agente_{prefix}",
+                f"agente-{prefix}",
+                f"unithos-agent-{prefix}",
+                f"unithos-agente-{prefix}",
+                f"unithos-agent-{prefix.replace('_', '-')}",
+            ])
+        if "multimedia" in clean_id:
+            names.extend(["agente_multimedia", "unithos-agent-multimedia", "unithos-multimedia-agent"])
+        if "reservas" in clean_id:
+            names.extend(["agente_reservas", "unithos-agent-reservas", "reservas_agent", "unithos-reservas-agent"])
+        if "empleado" in clean_id:
+            names.extend(["unithos-agent-empleado", "agente-empleado", "unithos-empleado-agent"])
+        if "huesped" in clean_id or "atencion" in clean_id:
+            names.extend(["unithos-agente-atencion-huesped", "agente-atencion-huesped", "unithos-atencion-huesped"])
+        if "pms" in clean_id:
+            names.extend(["unithos-pms-agent", "agente_gestion_pms", "unithos-gestion-pms"])
+        if "engagement" in clean_id:
+            names.extend(["unithos-agent-engagement"])
+
+        seen = set()
+        for name in names:
+            if name and name not in seen and name != host:
+                seen.add(name)
+                candidates.append(f"{scheme}://{name}{port_str}{path}")
+
+    unique_candidates = []
+    seen_urls = {url}
+    for c in candidates:
+        if c not in seen_urls:
+            seen_urls.add(c)
+            unique_candidates.append(c)
+
+    return unique_candidates
+
+
+async def discover_agents(endpoints: List[str], node_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Query A2A endpoints to obtain card and skill registrations.
     """
@@ -210,6 +301,7 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         for url in endpoints:
             card = None
+            working_url = url
             try:
                 resolver = A2ACardResolver(
                     httpx_client=client,
@@ -217,31 +309,20 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
                 )
                 card = await resolver.get_agent_card()
             except Exception as e:
-                alt_urls = []
-                if os.path.exists("/.dockerenv"):
-                    if "127.0.0.1" in url or "localhost" in url:
-                        alt_urls.append(url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal"))
-                        alt_urls.append(url.replace("127.0.0.1", "172.17.0.1").replace("localhost", "172.17.0.1"))
-                    elif "host.docker.internal" in url:
-                        alt_urls.append(url.replace("host.docker.internal", "172.17.0.1"))
-                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
-                else:
-                    if "host.docker.internal" in url:
-                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
-
+                alt_urls = _generate_candidate_urls(url, node_id)
                 last_err = e
                 for alt_url in alt_urls:
-                    if alt_url != url:
-                        try:
-                            resolver = A2ACardResolver(
-                                httpx_client=client,
-                                base_url=alt_url,
-                            )
-                            card = await resolver.get_agent_card()
-                            if card:
-                                break
-                        except Exception as e2:
-                            last_err = e2
+                    try:
+                        resolver = A2ACardResolver(
+                            httpx_client=client,
+                            base_url=alt_url,
+                        )
+                        card = await resolver.get_agent_card()
+                        if card:
+                            working_url = alt_url
+                            break
+                    except Exception as e2:
+                        last_err = e2
                 if not card:
                     print(f"BFA Discovery: Error connecting to Agent at {url} (tried {alt_urls}): {last_err}")
 
@@ -250,7 +331,7 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
                     registry[str(skill.id)] = {
                         "name": str(skill.name),
                         "description": str(skill.description),
-                        "url": url,
+                        "url": working_url,
                         "tags": list(skill.tags),
                         "examples": list(skill.examples),
                         "type": "agent",
@@ -258,7 +339,7 @@ async def discover_agents(endpoints: List[str]) -> Dict[str, Any]:
     return registry
 
 
-async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
+async def discover_tools(endpoints: List[str], node_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Query MCP endpoints to extract metadata schemas.
     """
@@ -266,30 +347,20 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         for url in endpoints:
             response = None
+            working_url = url
             try:
                 response = await client.get(f"{url}/tools")
             except Exception as e:
-                alt_urls = []
-                if os.path.exists("/.dockerenv"):
-                    if "127.0.0.1" in url or "localhost" in url:
-                        alt_urls.append(url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal"))
-                        alt_urls.append(url.replace("127.0.0.1", "172.17.0.1").replace("localhost", "172.17.0.1"))
-                    elif "host.docker.internal" in url:
-                        alt_urls.append(url.replace("host.docker.internal", "172.17.0.1"))
-                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
-                else:
-                    if "host.docker.internal" in url:
-                        alt_urls.append(url.replace("host.docker.internal", "127.0.0.1"))
-
+                alt_urls = _generate_candidate_urls(url, node_id)
                 last_err = e
                 for alt_url in alt_urls:
-                    if alt_url != url:
-                        try:
-                            response = await client.get(f"{alt_url}/tools")
-                            if response.status_code == 200:
-                                break
-                        except Exception as e2:
-                            last_err = e2
+                    try:
+                        response = await client.get(f"{alt_url}/tools")
+                        if response.status_code == 200:
+                            working_url = alt_url
+                            break
+                    except Exception as e2:
+                        last_err = e2
                 if response is None or response.status_code != 200:
                     print(f"BFA Discovery: Error connecting to MCP server at {url} (tried {alt_urls}): {last_err}")
 
@@ -304,7 +375,7 @@ async def discover_tools(endpoints: List[str]) -> Dict[str, Any]:
                         
                         registry[tool_name] = {
                             "type": "tool",
-                            "server_url": url,
+                            "server_url": working_url,
                             "name": tool_name,
                             "description": tool.get("description", ""),
                             "input_schema": tool.get("inputSchema", {}),
@@ -2501,12 +2572,16 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
         if not ROUTER:
             raise HTTPException(status_code=503, detail="Gateway not ready")
             
-        new_agents = await discover_agents([url])
+        new_agents = await discover_agents([url], node_id=node_id)
         if not new_agents:
             if node_id and node_id in REGISTERED_NODES and not REGISTERED_NODES[node_id].get("url"):
                 del REGISTERED_NODES[node_id]
             add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for Agent at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover agent at {url}")
+            
+        working_url = list(new_agents.values())[0].get("url") if new_agents else url
+        if working_url and working_url != url:
+            url = working_url
             
         norm_url = _normalize_local_url(url)
         current_target_id = node_id or (list(new_agents.keys())[0] if new_agents else None)
@@ -2641,12 +2716,16 @@ def create_gateway_app(config: BFAConfig = None) -> FastAPI:
                         detail=f"MCP Server URL '{url}' is already registered by node '{reg_id}'"
                     )
 
-        new_tools = await discover_tools([url])
+        new_tools = await discover_tools([url], node_id=node_id)
         if not new_tools:
             if node_id and node_id in REGISTERED_NODES and not REGISTERED_NODES[node_id].get("url"):
                 del REGISTERED_NODES[node_id]
             add_system_log("ERROR", node_id or url, f"Failed dynamic discovery for MCP tools at {url}.")
             raise HTTPException(status_code=400, detail=f"Failed to discover MCP tools at {url}")
+            
+        working_url = list(new_tools.values())[0].get("server_url") if new_tools else url
+        if working_url and working_url != url:
+            url = working_url
             
         if node_id is not None:
             for tool_name, new_item in new_tools.items():

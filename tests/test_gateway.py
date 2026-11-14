@@ -103,7 +103,7 @@ def test_gateway_endpoints(mock_gateway_setup):
 @patch("bfa_sdk.core.gateway.discover_agents")
 @patch("bfa_sdk.core.gateway.discover_tools")
 def test_dynamic_registration_endpoints(mock_discover_tools, mock_discover_agents, mock_gateway_setup):
-    def mock_discover_agents_side_effect(urls):
+    def mock_discover_agents_side_effect(urls, *args, **kwargs):
         if "http://localhost:8080" in urls:
             return {
                 "new_agent_skill": {
@@ -117,7 +117,7 @@ def test_dynamic_registration_endpoints(mock_discover_tools, mock_discover_agent
             }
         return {}
         
-    def mock_discover_tools_side_effect(urls):
+    def mock_discover_tools_side_effect(urls, *args, **kwargs):
         if "http://localhost:8081" in urls:
             return {
                 "new_mcp_tool": {
@@ -411,7 +411,7 @@ def test_gateway_register_mcp_fail(mock_discover, mock_gateway_setup):
 @patch("bfa_sdk.core.gateway.discover_tools")
 @patch("bfa_sdk.core.gateway.discover_agents")
 def test_gateway_register_agent_collisions(mock_discover_agents, mock_discover_tools, mock_gateway_setup):
-    def mock_discover_agents_side_effect(urls):
+    def mock_discover_agents_side_effect(urls, *args, **kwargs):
         if "http://localhost:8001" in urls:
             return {
                 "skill_1": {
@@ -471,7 +471,7 @@ def test_gateway_register_agent_collisions(mock_discover_agents, mock_discover_t
 @patch("bfa_sdk.core.gateway.discover_tools")
 @patch("bfa_sdk.core.gateway.discover_agents")
 def test_gateway_register_mcp_collisions(mock_discover_agents, mock_discover_tools, mock_gateway_setup):
-    def mock_discover_tools_side_effect(urls):
+    def mock_discover_tools_side_effect(urls, *args, **kwargs):
         if "http://localhost:8003" in urls:
             return {
                 "tool_1": {
@@ -531,7 +531,7 @@ def test_gateway_register_mcp_collisions(mock_discover_agents, mock_discover_too
 @patch("bfa_sdk.core.gateway.discover_tools")
 @patch("bfa_sdk.core.gateway.discover_agents")
 def test_heartbeat_and_registration_caching(mock_discover_agents, mock_discover_tools, mock_gateway_setup):
-    def mock_discover_agents_side_effect(urls):
+    def mock_discover_agents_side_effect(urls, *args, **kwargs):
         if "http://localhost:8080" in urls:
             return {
                 "test_cached_agent": {
